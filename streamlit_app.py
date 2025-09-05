@@ -346,9 +346,9 @@ def _classify(pre, after, prewin, afterwin, times):
         return "🚫 不是有效訊號"
     win_sum = prewin + afterwin
     if (pre < 0 and after < 0) and (times > 8) and (win_sum < 70):
-        return "🐻 熊市訊號"
-    if (pre > 0 and after > 0) and (times > 8) and (win_sum > 130):
         return "🐮 牛市訊號"
+    if (pre > 0 and after > 0) and (times > 8) and (win_sum > 130):
+        return "🐻 熊市訊號"
     return "🚫 不是有效訊號"
 
 def compute_score(pre, after, prewin, afterwin, times):
@@ -517,7 +517,31 @@ if 'summary_yoy_df' in locals() and not summary_yoy_df.empty:
         st.info("年增版本：沒有達到事件數門檻（≥ 8）的組合可作為最佳結果。")
 
 
-# ===== Plot by series_ids_text: Levels & YoY (brush to set x-range; y auto-rescales) =====
+# ===== Plot by series_ids_text: Levels & YoY
+
+# --- 將最佳組合作為圖表的 rolling 參考（兩者可能不同） ---
+best_raw_window = None
+best_yoy_window = None
+try:
+    if 'summary_raw_df' in locals() and not summary_raw_df.empty:
+        THRESHOLD_EVENTS = 8  # 與上方一致
+        raw_candidates = summary_raw_df[summary_raw_df.get("事件數") >= THRESHOLD_EVENTS] if "事件數" in summary_raw_df.columns else summary_raw_df.iloc[0:0]
+        if not raw_candidates.empty:
+            best_raw_window = int(raw_candidates.iloc[0]['window'])
+    if 'summary_yoy_df' in locals() and not summary_yoy_df.empty:
+        THRESHOLD_EVENTS = 8
+        yoy_candidates = summary_yoy_df[summary_yoy_df.get("事件數") >= THRESHOLD_EVENTS] if "事件數" in summary_yoy_df.columns else summary_yoy_df.iloc[0:0]
+        if not yoy_candidates.empty:
+            best_yoy_window = int(yoy_candidates.iloc[0]['window'])
+except Exception as _:
+    pass
+# Fallback：若無最佳，使用原本 chart_winrolling_value
+if 'chart_winrolling_value' in locals():
+    if best_raw_window is None:
+        best_raw_window = chart_winrolling_value
+    if best_yoy_window is None:
+        best_yoy_window = chart_winrolling_value
+ (brush to set x-range; y auto-rescales) =====
 st.divider()
 st.subheader("Each breath series: Levels (rolling mean ±σ) and YoY (brush to set time window)")
 
@@ -611,8 +635,11 @@ def yoy_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value: in
 
     return alt.vconcat(upper + zero_line, lower).resolve_scale(y="independent")
 
-# 圖表固定使用 chart_winrolling_value
-winrolling_value_for_chart = chart_winrolling_value
+# 根據最佳組合決定各圖的 rolling 視窗：
+# - Levels 使用原始版本最佳 window
+# - YoY 使用年增版本最佳 window
+winrolling_for_levels = best_raw_window if 'best_raw_window' in locals() and best_raw_window else chart_winrolling_value
+winrolling_for_yoy = best_yoy_window if 'best_yoy_window' in locals() and best_yoy_window else chart_winrolling_value
 
 # 根據名稱找到 ID
 sid = id_name_map[id_name_map['繁中名稱'] == selected_variable_name]['ID'].iloc[0]
@@ -625,6 +652,8 @@ else:
     with st.expander(f"Series: {selected_variable_name} ({sid})", expanded=True):
         colA, colB = st.columns(2)
         with colA:
-            st.altair_chart(levels_chart_with_brush(s, sid, selected_variable_name, winrolling_value_for_chart), use_container_width=True)
+            st.caption(f"Levels rolling window = {winrolling_for_levels}")
+            st.altair_chart(levels_chart_with_brush(s, sid, selected_variable_name, winrolling_for_levels), use_container_width=True)
         with colB:
-            st.altair_chart(yoy_chart_with_brush(s, sid, selected_variable_name, winrolling_value_for_chart), use_container_width=True)
+            st.caption(f"YoY rolling window = {winrolling_for_yoy}")
+            st.altair_chart(yoy_chart_with_brush(s, sid, selected_variable_name, winrolling_for_yoy), use_container_width=True)
