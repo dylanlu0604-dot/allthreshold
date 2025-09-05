@@ -311,31 +311,46 @@ if not results_flat:
 
 # ===== 產出總覽表（每一列是一個 std×window）=====
 summary_rows = []
+required_keys = ["series_id","std","winrolling","times1","pre1","prewin1","after1","afterwin1",
+                 "score1","times2","pre2","after2","score2","effective1","effective2"]
+
 for r in results_flat:
+    # 安全取值，若缺欄位則以 NaN/合理預設代替，並提示
+    missing = [k for k in required_keys if k not in r]
+    if missing:
+        st.warning(f"結果缺少欄位 {missing}，已以空值代替（std={r.get('std','?')}, window={r.get('winrolling','?')})")
     summary_rows.append({
-        "系列": get_name_from_id(r["series_id"], str(r["series_id"])),
-        "ID": r["series_id"],
-        "std": r["std"],
-        "window": r["winrolling"],
-        "事件數(原始)": r["times1"],
-        "前12m均值%(原始)": r["pre1"],
-        "後12m均值%(原始)": r["after1"],
-        "勝率前(原始)": r["prewin1"],
-        "勝率後(原始)": r["afterwin1"],
-        "得分(原始)": r["score1"],
-        "事件數(年增)": r["times2"],
-        "前12m均值%(年增)": r["pre2"],
-        "後12m均值%(年增)": r["after2"],
-        "得分(年增)": r["score2"],
-        "有效(原始)": r["effective1"],
-        "有效(年增)": r["effective2"],
+        "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
+        "ID": r.get("series_id", None),
+        "std": r.get("std", None),
+        "window": r.get("winrolling", None),
+        "事件數(原始)": r.get("times1", None),
+        "前12m均值%(原始)": r.get("pre1", None),
+        "後12m均值%(原始)": r.get("after1", None),
+        "勝率前(原始)": r.get("prewin1", None),
+        "勝率後(原始)": r.get("afterwin1", None),
+        "得分(原始)": r.get("score1", None),
+        "事件數(年增)": r.get("times2", None),
+        "前12m均值%(年增)": r.get("pre2", None),
+        "後12m均值%(年增)": r.get("after2", None),
+        "得分(年增)": r.get("score2", None),
+        "有效(原始)": r.get("effective1", None),
+        "有效(年增)": r.get("effective2", None),
     })
 
 summary_df = pd.DataFrame(summary_rows)
-summary_df = summary_df.sort_values(by=["得分(年增)", "得分(原始)"], ascending=False)
+for col in ["事件數(原始)","前12m均值%(原始)","後12m均值%(原始)","勝率前(原始)","勝率後(原始)","得分(原始)",
+            "事件數(年增)","前12m均值%(年增)","後12m均值%(年增)","得分(年增)"]:
+    if col in summary_df.columns:
+        summary_df[col] = pd.to_numeric(summary_df[col], errors="coerce")
+
+if set(["得分(年增)","得分(原始)"]).issubset(summary_df.columns):
+    summary_df = summary_df.sort_values(by=["得分(年增)", "得分(原始)"], ascending=False, na_position="last")
 
 st.subheader("所有 std × window 組合結果（總覽）")
 st.dataframe(summary_df, use_container_width=True)
+
+
 
 # 顯示最佳組合的細節（可省略）
 if not summary_df.empty:
