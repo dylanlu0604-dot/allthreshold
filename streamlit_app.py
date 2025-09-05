@@ -312,11 +312,12 @@ if not results_flat:
 
 
 
+
 # ===== 產出總覽表（拆成「原始」與「年增」兩張表）=====
 summary_rows_raw = []
 summary_rows_yoy = []
 required_keys = ["series_id","std","winrolling","times1","pre1","prewin1","after1","afterwin1",
-                 "times2","pre2","after2","effective1","effective2"]  # score1/score2 可由 after-pre 回推
+                 "times2","pre2","prewin2","after2","afterwin2"]  # 有效性用到勝率與次數
 
 def _to_float(x):
     try:
@@ -324,43 +325,82 @@ def _to_float(x):
     except Exception:
         return None
 
+def _to_int(x):
+    try:
+        return int(x)
+    except Exception:
+        return None
+
+def classify_signal(pre, after, prewin, afterwin, times):
+    # 規則：
+    # 1) 🐮 牛市訊號 ： if  (pre < 0 and after < 0) and times > 8 and  (prewin + afterwin < 70)
+    # 2) 🐻 熊市訊號 ： if  (pre > 0 and after > 0) and times > 8 and  (prewin + afterwin > 130)
+    # 3) 🚫 不是有效訊號：不符合以上兩個條件
+    vals = [pre, after, prewin, afterwin, times]
+    if any(v is None for v in vals):
+        return "🚫 不是有效訊號"
+    try:
+        pre = float(pre); after = float(after)
+        prewin = float(prewin); afterwin = float(afterwin)
+        times = int(times)
+    except Exception:
+        return "🚫 不是有效訊號"
+    win_sum = prewin + afterwin
+    if (pre < 0 and after < 0) and (times > 8) and (win_sum < 70):
+        return "🐮 牛市訊號"
+    if (pre > 0 and after > 0) and (times > 8) and (win_sum > 130):
+        return "🐻 熊市訊號"
+    return "🚫 不是有效訊號"
+
 for r in results_flat:
     missing = [k for k in required_keys if k not in r]
     if missing:
         st.warning(f"結果缺少欄位 {missing}，已以空值代替（std={r.get('std','?')}, window={r.get('winrolling','?')})")
+
     # 原始版
     pre1_val, after1_val = _to_float(r.get("pre1")), _to_float(r.get("after1"))
-    score1_val = r.get("score1", None)
-    if score1_val is None and pre1_val is not None and after1_val is not None:
-        score1_val = after1_val - pre1_val
+    prewin1_val, afterwin1_val = _to_float(r.get("prewin1")), _to_float(r.get("afterwin1"))
+    times1_val = _to_int(r.get("times1"))
+    score1_val = r.get("score1")
+    if score1_val is None and (pre1_val is not None) and (after1_val is not None):
+        score1_val = (after1_val - pre1_val)
+    label1 = classify_signal(pre1_val, after1_val, prewin1_val, afterwin1_val, times1_val)
+
     summary_rows_raw.append({
         "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
         "ID": r.get("series_id", None),
         "std": r.get("std", None),
         "window": r.get("winrolling", None),
-        "事件數": r.get("times1", None),
+        "事件數": times1_val,
         "前12m均值%": pre1_val,
         "後12m均值%": after1_val,
-        "勝率前": r.get("prewin1", None),
-        "勝率後": r.get("afterwin1", None),
+        "勝率前": prewin1_val,
+        "勝率後": afterwin1_val,
         "得分": score1_val,
-        "有效": r.get("effective1", None),
+        "有效": label1,
     })
+
     # 年增版
     pre2_val, after2_val = _to_float(r.get("pre2")), _to_float(r.get("after2"))
-    score2_val = r.get("score2", None)
-    if score2_val is None and pre2_val is not None and after2_val is not None:
-        score2_val = after2_val - pre2_val
+    prewin2_val, afterwin2_val = _to_float(r.get("prewin2")), _to_float(r.get("afterwin2"))
+    times2_val = _to_int(r.get("times2"))
+    score2_val = r.get("score2")
+    if score2_val is None and (pre2_val is not None) and (after2_val is not None):
+        score2_val = (after2_val - pre2_val)
+    label2 = classify_signal(pre2_val, after2_val, prewin2_val, afterwin2_val, times2_val)
+
     summary_rows_yoy.append({
         "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
         "ID": r.get("series_id", None),
         "std": r.get("std", None),
         "window": r.get("winrolling", None),
-        "事件數": r.get("times2", None),
+        "事件數": times2_val,
         "前12m均值%": pre2_val,
         "後12m均值%": after2_val,
+        "勝率前": prewin2_val,
+        "勝率後": afterwin2_val,
         "得分": score2_val,
-        "有效": r.get("effective2", None),
+        "有效": label2,
     })
 
 summary_raw_df = pd.DataFrame(summary_rows_raw)
@@ -372,7 +412,7 @@ for df in (summary_raw_df, summary_yoy_df):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# 各自排序
+# 各自排序（先得分、再事件數）
 if not summary_raw_df.empty:
     by_cols = [c for c in ["得分","事件數"] if c in summary_raw_df.columns]
     summary_raw_df = summary_raw_df.sort_values(by=by_cols, ascending=False, na_position="last")
@@ -385,6 +425,8 @@ st.dataframe(summary_raw_df, use_container_width=True)
 
 st.subheader("年增版本：所有 std × window 組合結果")
 st.dataframe(summary_yoy_df, use_container_width=True)
+
+
 
 
 
@@ -416,33 +458,44 @@ def plot_mean_curve(finalb_df, title):
     ax.set_ylabel('Index (100 = 事件當月)')
     st.pyplot(fig, use_container_width=True)
 
-# 原始最佳
-if 'summary_raw_df' in locals() and not summary_raw_df.empty:
-    best_raw = summary_raw_df.iloc[0]
-    st.markdown(f"### 原始版本最佳組合：std = **{best_raw['std']}**, window = **{int(best_raw['window'])}**")
-    best_r_raw = next((r for r in results_flat if r.get('std')==best_raw['std'] and r.get('winrolling')==best_raw['window']), None)
-    col1, col2 = st.columns(2)
-    with col1:
-        if best_r_raw and best_r_raw.get("resulttable1") is not None:
-            st.dataframe(best_r_raw["resulttable1"], use_container_width=True)
-        else:
-            st.info("無原始值版本表格。")
-    with col2:
-        plot_mean_curve(best_r_raw.get("finalb1") if best_r_raw else None, "Final b1")
+THRESHOLD_EVENTS = 8
+st.caption(f"＊最佳組合挑選門檻：事件數 ≥ {THRESHOLD_EVENTS}。")
 
-# 年增最佳
+# 原始最佳（只挑事件數>=8）
+if 'summary_raw_df' in locals() and not summary_raw_df.empty:
+    raw_candidates = summary_raw_df[summary_raw_df.get("事件數") >= THRESHOLD_EVENTS] if "事件數" in summary_raw_df.columns else summary_raw_df.iloc[0:0]
+    if not raw_candidates.empty:
+        best_raw = raw_candidates.iloc[0]
+        st.markdown(f"### 原始版本最佳組合：std = **{best_raw['std']}**, window = **{int(best_raw['window'])}**")
+        best_r_raw = next((r for r in results_flat if r.get('std')==best_raw['std'] and r.get('winrolling')==best_raw['window']), None)
+        col1, col2 = st.columns(2)
+        with col1:
+            if best_r_raw and best_r_raw.get("resulttable1") is not None:
+                st.dataframe(best_r_raw["resulttable1"], use_container_width=True)
+            else:
+                st.info("無原始值版本表格。")
+        with col2:
+            plot_mean_curve(best_r_raw.get("finalb1") if best_r_raw else None, "Final b1")
+    else:
+        st.info("原始版本：沒有達到事件數門檻（≥ 8）的組合可作為最佳結果。")
+
+# 年增最佳（只挑事件數>=8）
 if 'summary_yoy_df' in locals() and not summary_yoy_df.empty:
-    best_yoy = summary_yoy_df.iloc[0]
-    st.markdown(f"### 年增版本最佳組合：std = **{best_yoy['std']}**, window = **{int(best_yoy['window'])}**")
-    best_r_yoy = next((r for r in results_flat if r.get('std')==best_yoy['std'] and r.get('winrolling')==best_yoy['window']), None)
-    col3, col4 = st.columns(2)
-    with col3:
-        if best_r_yoy and best_r_yoy.get("resulttable2") is not None:
-            st.dataframe(best_r_yoy["resulttable2"], use_container_width=True)
-        else:
-            st.info("無年增率版本表格。")
-    with col4:
-        plot_mean_curve(best_r_yoy.get("finalb2") if best_r_yoy else None, "Final b2")
+    yoy_candidates = summary_yoy_df[summary_yoy_df.get("事件數") >= THRESHOLD_EVENTS] if "事件數" in summary_yoy_df.columns else summary_yoy_df.iloc[0:0]
+    if not yoy_candidates.empty:
+        best_yoy = yoy_candidates.iloc[0]
+        st.markdown(f"### 年增版本最佳組合：std = **{best_yoy['std']}**, window = **{int(best_yoy['window'])}**")
+        best_r_yoy = next((r for r in results_flat if r.get('std')==best_yoy['std'] and r.get('winrolling')==best_yoy['window']), None)
+        col3, col4 = st.columns(2)
+        with col3:
+            if best_r_yoy and best_r_yoy.get("resulttable2") is not None:
+                st.dataframe(best_r_yoy["resulttable2"], use_container_width=True)
+            else:
+                st.info("無年增率版本表格。")
+        with col4:
+            plot_mean_curve(best_r_yoy.get("finalb2") if best_r_yoy else None, "Final b2")
+    else:
+        st.info("年增版本：沒有達到事件數門檻（≥ 8）的組合可作為最佳結果。")
 
 
 # ===== Plot by series_ids_text: Levels & YoY (brush to set x-range; y auto-rescales) =====
