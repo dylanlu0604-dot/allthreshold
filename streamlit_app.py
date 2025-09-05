@@ -21,6 +21,12 @@ except Exception:
 st.set_page_config(page_title="熊市訊號與牛市訊號尋找工具", layout="wide")
 st.title("熊市訊號與牛市訊號尋找工具")
 
+# --- DEBUGGING HELPER ---
+# This will print the entire session state at the top of the app on every rerun.
+st.subheader("🕵️ 除錯資訊 (Session State)")
+st.json(st.session_state.to_dict())
+# --- END DEBUGGING ---
+
 # ---------- Load ID Map ----------
 @st.cache_data(show_spinner="下載ID對應表...", ttl=3600)
 def load_series_id_map() -> pd.DataFrame:
@@ -101,7 +107,7 @@ def find_row_number_for_date(df_obj: pd.DataFrame, specific_date: pd.Timestamp) 
     try:
         return df_obj.index.get_loc(pd.Timestamp(specific_date))
     except KeyError:
-        return -1 # Return an invalid index if not found
+        return -1
 
 def _condition(df: pd.DataFrame, std: float, winrolling: int, mode: str) -> pd.Series:
     if mode == "Greater":
@@ -116,8 +122,7 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
         x2, code2 = "index", target_id
         df1 = mm(code1, "MS", x1, k)
         df2 = mm(code2, "MS", x2, k)
-        if df1 is None or df2 is None:
-            return results
+        if df1 is None or df2 is None: return results
         alldf = pd.concat([df1, df2], axis=1).resample("MS").asfreq().ffill()
         timeforward, timepast = 31, 31
 
@@ -128,19 +133,10 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
                 if not finalb_dates or ((date - finalb_dates[-1]).days / 30) >= months_threshold:
                     finalb_dates.append(date)
 
-            if not finalb_dates:
-                return None, None, 0, 0, 0, 0, 0
+            if not finalb_dates: return None, None, 0, 0, 0, 0, 0
 
-            dfs = []
-            for dt in finalb_dates:
-                a = find_row_number_for_date(alldf_ref, dt)
-                if a == -1 or a - timepast < 0 or a + timeforward > len(alldf_ref):
-                    continue
-                temp_df = alldf_ref["index"].iloc[a - timepast : a + timeforward].to_frame(name=dt).reset_index(drop=True)
-                dfs.append(temp_df)
-            
-            if not dfs:
-                 return None, None, 0, 0, 0, 0, 0
+            dfs = [alldf_ref["index"].iloc[find_row_number_for_date(alldf_ref, dt) - timepast : find_row_number_for_date(alldf_ref, dt) + timeforward].to_frame(name=dt).reset_index(drop=True) for dt in finalb_dates if find_row_number_for_date(alldf_ref, dt) != -1 and find_row_number_for_date(alldf_ref, dt) - timepast >= 0 and find_row_number_for_date(alldf_ref, dt) + timeforward <= len(alldf_ref)]
+            if not dfs: return None, None, 0, 0, 0, 0, 0
 
             origin = pd.concat(dfs, axis=1)
             finalb = origin.apply(lambda col: 100 * col / col.iloc[timepast])
@@ -150,25 +146,23 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
             table = pd.concat([finalb.iloc[timepast + off] for off in offsets], axis=1)
             table.columns = [f"{off}m" for off in offsets]
             
-            resulttable = table.iloc[:-1].copy() # Exclude the 'mean' row for now
+            resulttable = table.iloc[:-1].copy()
             perc_df = pd.DataFrame([(resulttable > 100).mean() * 100], index=["勝率"])
-            resulttable_final = pd.concat([resulttable, perc_df, table.iloc[-1:]]) # Add it back at the end
+            resulttable_final = pd.concat([resulttable, perc_df, table.iloc[-1:]])
 
-            times = len(resulttable) # Number of events is the number of rows before adding 勝率 and mean
+            times = len(resulttable)
             pre = resulttable_final.loc["mean", "-12m"] - 100
             prewin = resulttable_final.loc["勝率", "-12m"]
             after = resulttable_final.loc["mean", "12m"] - 100
             afterwin = resulttable_final.loc["勝率", "12m"]
             return resulttable_final, finalb, times, pre, prewin, after, afterwin
 
-        # 原始版
         df1_proc = alldf[[x1, x2]].copy()
         df1_proc["Rolling_mean"] = df1_proc[x1].rolling(window=winrolling_value).mean()
         df1_proc["Rolling_std"] = df1_proc[x1].rolling(window=winrolling_value).std()
         filtered_df1 = df1_proc[_condition(df1_proc, std_value, winrolling_value, mode)]
         resulttable1, finalb1, times1, pre1, prewin1, after1, afterwin1 = calculate_performance(filtered_df1, alldf)
 
-        # 年增版
         df2_proc = alldf[[x1, x2]].copy()
         df2_proc[x1] = df2_proc[x1] / df2_proc[x1].shift(12)
         df2_proc["Rolling_mean"] = df2_proc[x1].rolling(window=winrolling_value).mean()
@@ -239,26 +233,31 @@ first_cols = ['版本', '系列', 'std', 'window', '觸發', '有效', '得分',
 other_cols = [c for c in combined_df.columns if c not in first_cols]
 combined_df = combined_df[first_cols + other_cols]
 
+st.divider()
 st.subheader("所有組合結果分析")
 st.caption("點選任一列，即可在下方查看該組合的詳細數據與績效走勢圖。")
+
+# Simplified dataframe display for robustness
 st.dataframe(
-    combined_df.style.format({
-        "std": "{:.1f}", "得分": "{:.2f}", "前12m均值%": "{:.2f}", "後12m均值%": "{:.2f}",
-        "勝率前": "{:.2f}%", "勝率後": "{:.2f}%"
-    }), 
-    key="selection", on_select="rerun", selection_mode="single-row",
-    use_container_width=True, hide_index=True, height=400
+    combined_df, 
+    key="data_selector", 
+    on_select="rerun", 
+    selection_mode="single-row",
+    use_container_width=True, 
+    hide_index=True, 
+    height=400
 )
 
-# --- MODIFICATION START: Robust selection handling ---
+# --- ROBUST SELECTION HANDLING ---
 selected_row_data = None
-selection_state = st.session_state.get("selection")
+selection = st.session_state.get("data_selector")
 
-if selection_state and isinstance(selection_state.get("rows"), list) and selection_state["rows"]:
-    selected_index = selection_state["rows"][0]
+# The selection object from st.dataframe is {'rows': [index_of_clicked_row]}
+if selection and selection.get("rows"):
+    selected_index = selection["rows"][0]
+    # Ensure the index is valid
     if selected_index < len(combined_df):
         selected_row_data = combined_df.iloc[selected_index]
-# --- MODIFICATION END ---
 
 st.divider()
 st.subheader("選定組合的詳細結果")
@@ -292,11 +291,9 @@ else:
             ax.axvline(0, color='r', linestyle='--', linewidth=1); ax.axhline(100, color='grey', linestyle=':', linewidth=1)
             xlim = (-24, 24); ax.set_xlim(xlim)
             mask = (x >= xlim[0]) & (x <= xlim[1])
-            if np.any(mask):
-                valid_y = y[mask]
-                if len(valid_y) > 0:
-                    ymin, ymax = np.min(valid_y) * 0.98, np.max(valid_y) * 1.02
-                    ax.set_ylim(ymin, ymax if ymax > ymin else ymax + 1)
+            if np.any(mask) and len(y[mask]) > 0:
+                ymin, ymax = np.min(y[mask]) * 0.98, np.max(y[mask]) * 1.02
+                ax.set_ylim(ymin, ymax if ymax > ymin else ymax + 1)
             ax.set_xlabel('相對於事件的月數'); ax.set_ylabel('標準化指數 (事件月 = 100)')
             ax.grid(True, alpha=0.5, linestyle='--')
             st.pyplot(fig, use_container_width=True)
