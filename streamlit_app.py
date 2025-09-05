@@ -346,9 +346,9 @@ def _classify(pre, after, prewin, afterwin, times):
         return "🚫 不是有效訊號"
     win_sum = prewin + afterwin
     if (pre < 0 and after < 0) and (times > 8) and (win_sum < 70):
-        return "🐮 牛市訊號"
+        return "🐻 熊市訊號🐮 牛市訊號"
     if (pre > 0 and after > 0) and (times > 8) and (win_sum > 130):
-        return "🐻 熊市訊號"
+        return "🐮 牛市訊號"
     return "🚫 不是有效訊號"
 
 def compute_score(pre, after, prewin, afterwin, times):
