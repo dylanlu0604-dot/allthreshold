@@ -9,6 +9,7 @@ from itertools import product
 import multiprocessing
 import io
 import altair as alt
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # Optional parallelism
 try:
@@ -355,80 +356,164 @@ for r in results_flat:
 summary_raw_df = pd.DataFrame(summary_rows_raw)
 summary_yoy_df = pd.DataFrame(summary_rows_yoy)
 
-for df in (summary_raw_df, summary_yoy_df):
-    for col in ["事件數","前12m均值%","後12m均值%","勝率前","勝率後","得分"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    # 排序（得分、事件數）
-    by_cols = [c for c in ["得分","事件數"] if c in df.columns]
-    if by_cols:
-        df.sort_values(by=by_cols, ascending=False, na_position="last", inplace=True)
+# ========== MODIFICATION START: Combine tables for interactive selection ==========
 
-st.subheader("原始版本：所有 std × window × 觸發 組合結果")
-st.dataframe(summary_raw_df, use_container_width=True)
+# Add a '版本' (Version) column to each dataframe
+summary_raw_df['版本'] = '原始'
+summary_yoy_df['版本'] = '年增'
 
-st.subheader("年增版本：所有 std × window × 觸發 組合結果")
-st.dataframe(summary_yoy_df, use_container_width=True)
+# Concatenate the two dataframes
+combined_df = pd.concat([summary_raw_df, summary_yoy_df], ignore_index=True)
 
-# ---------- Best picks (events ≥ 8) ----------
-THRESHOLD_EVENTS = 8
-st.caption(f"＊最佳組合挑選門檻：事件數 ≥ {THRESHOLD_EVENTS}。")
+# Format and sort the combined dataframe
+for col in ["事件數","前12m均值%","後12m均值%","勝率前","勝率後","得分"]:
+    if col in combined_df.columns:
+        combined_df[col] = pd.to_numeric(combined_df[col], errors="coerce")
 
-def pick_best(df: pd.DataFrame) -> pd.Series | None:
-    if df is None or df.empty: return None
-    if "事件數" not in df.columns: return None
-    cand = df[df["事件數"] >= THRESHOLD_EVENTS]
-    if cand.empty: return None
-    return cand.iloc[0]
+by_cols = [c for c in ["得分","事件數"] if c in combined_df.columns]
+if by_cols:
+    combined_df.sort_values(by=by_cols, ascending=False, na_position="last", inplace=True)
 
-best_raw = pick_best(summary_raw_df)
-best_yoy = pick_best(summary_yoy_df)
+# Reorder columns to have '版本' at the beginning
+first_cols = ['版本', '系列', 'ID', 'std', 'window', '觸發', '有效', '得分', '事件數']
+other_cols = [col for col in combined_df.columns if col not in first_cols]
+combined_df = combined_df[first_cols + other_cols]
 
-def show_best_block(best_row, results_flat, table_key, title, result_key_table, result_key_curve):
-    if best_row is None:
-        st.info(f"{title}：沒有達到事件數門檻（≥ {THRESHOLD_EVENTS}）的組合。")
-        return
-    st.markdown(f"### {title}最佳組合：std = **{best_row['std']}**, window = **{int(best_row['window'])}**, 觸發 = **{best_row['觸發']}**")
-    best_r = next((r for r in results_flat
-                   if r.get('std')==best_row['std']
-                   and r.get('winrolling')==best_row['window']
-                   and r.get('mode')==best_row['觸發']), None)
+
+st.subheader("所有組合結果分析")
+st.caption("點選下方任一列表格，即可在下方區塊查看該組合的詳細數據與績效走勢圖。")
+
+# Use st.dataframe with on_select to make it interactive
+# Note: Using AgGrid for a better experience as it keeps the selection visually.
+# If you don't have st_aggrid, you can replace this block with the st.dataframe version below.
+
+gb = GridOptionsBuilder.from_dataframe(combined_df)
+gb.configure_selection(selection_mode='single', use_checkbox=False)
+gb.configure_column("前12m均值%", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
+gb.configure_column("後12m均值%", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
+gb.configure_column("勝率前", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
+gb.configure_column("勝率後", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
+gb.configure_column("得分", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
+gridOptions = gb.build()
+
+grid_response = AgGrid(
+    combined_df,
+    gridOptions=gridOptions,
+    update_mode=GridUpdateMode.SELECTION_CHANGED,
+    allow_unsafe_jscode=True,
+    height=400,
+    width='100%',
+    theme='streamlit' # or 'alpine', 'balham', 'material'
+)
+
+selected_rows = grid_response['selected_rows']
+
+# --- Alternative using st.dataframe (less visually clear which row is selected) ---
+# st.dataframe(
+#     combined_df,
+#     key="combined_selection",
+#     on_select="rerun",
+#     selection_mode="single-row",
+#     use_container_width=True,
+#     hide_index=True
+# )
+#
+# selection = st.session_state.get("combined_selection")
+# selected_rows = []
+# if selection and selection['rows']:
+#     idx = selection['rows'][0]
+#     selected_rows.append(combined_df.iloc[idx].to_dict())
+# ---------------------------------------------------------------------------------
+
+
+st.divider()
+st.subheader("選定組合的詳細結果")
+
+if not selected_rows:
+    st.info("請點選上方表格的任一列，以在此處查看詳細結果。")
+else:
+    # Get the data from the single selected row
+    selected_row = pd.DataFrame(selected_rows).iloc[0]
+
+    # Extract parameters from the selected row
+    version = selected_row['版本']
+    std_val = selected_row['std']
+    win_val = selected_row['window']
+    mode_val = selected_row['觸發']
+
+    # Determine which result keys to use based on the 'version'
+    if version == '原始':
+        title_prefix = "原始版本"
+        result_key_table = "resulttable1"
+        result_key_curve = "finalb1"
+    else: # '年增'
+        title_prefix = "年增版本"
+        result_key_table = "resulttable2"
+        result_key_curve = "finalb2"
+
+    # Find the matching full result dictionary from the original calculation
+    matching_result = next((r for r in results_flat
+                           if r.get('std') == std_val
+                           and r.get('winrolling') == win_val
+                           and r.get('mode') == mode_val), None)
+
+    st.markdown(f"### {title_prefix}：std = **{std_val}**, window = **{int(win_val)}**, 觸發 = **{mode_val}**")
+
     col1, col2 = st.columns(2)
+
     with col1:
-        if best_r and best_r.get(result_key_table) is not None:
-            st.dataframe(best_r[result_key_table], use_container_width=True)
+        st.markdown("##### **績效摘要表**")
+        if matching_result and matching_result.get(result_key_table) is not None:
+            st.dataframe(matching_result[result_key_table].style.format("{:.2f}"), use_container_width=True)
         else:
-            st.info("無表格資料。")
+            st.info("無表格資料可顯示。")
+
     with col2:
-        def plot_mean_curve(finalb_df, title):
-            if finalb_df is None or "mean" not in finalb_df.columns:
-                st.info(f"{title} 無曲線資料。"); return
+        st.markdown("##### **事件前後平均走勢**")
+        finalb_df = matching_result.get(result_key_curve) if matching_result else None
+
+        if finalb_df is None or "mean" not in finalb_df.columns:
+            st.info("無曲線圖資料可顯示。")
+        else:
             y = finalb_df["mean"].values
-            n = len(y); half = n//2
+            n = len(y)
+            half = n // 2
             x = np.arange(-half, n - half)
-            fig, ax = plt.subplots(figsize=(6,5))
-            ax.plot(x, y, label=title)
-            ax.axvline(0, linestyle='--')
-            xlim = (-15, 15); ax.set_xlim(xlim)
-            mask = (x>=xlim[0]) & (x<=xlim[1])
+
+            fig, ax = plt.subplots(figsize=(6, 5))
+            ax.plot(x, y, label=title_prefix)
+            ax.axvline(0, color='red', linestyle='--', linewidth=1)
+            ax.axhline(100, color='gray', linestyle=':', linewidth=1)
+
+            # Set a fixed view window for better comparison
+            xlim = (-24, 24)
+            ax.set_xlim(xlim)
+            mask = (x >= xlim[0]) & (x <= xlim[1])
             if np.any(mask):
-                ymin = float(np.min(y[mask]))*0.99; ymax = float(np.max(y[mask]))*1.01
+                ymin = float(np.min(y[mask])) * 0.98
+                ymax = float(np.max(y[mask])) * 1.02
                 if ymin == ymax: ymin -= 1.0; ymax += 1.0
                 ax.set_ylim(ymin, ymax)
-            ax.set_xlabel('Months'); ax.set_ylabel('Index (100 = 事件當月)')
+
+            ax.set_xlabel('相對於事件發生的月數')
+            ax.set_ylabel('標準化指數 (事件當月 = 100)')
+            ax.grid(True, linestyle='--', alpha=0.6)
             st.pyplot(fig, use_container_width=True)
-        plot_mean_curve(best_r.get(result_key_curve) if best_r else None, title)
 
-show_best_block(best_raw, results_flat, "raw", "原始版本", "resulttable1", "finalb1")
-show_best_block(best_yoy, results_flat, "yoy", "年增版本", "resulttable2", "finalb2")
+# ========== MODIFICATION END ==========
 
-# ---------- Charts (use best windows if available) ----------
-# Determine best windows
+
+# Determine best windows for the charts below
+# This logic can now be simplified or based on the combined table
+best_raw = combined_df[(combined_df['版本'] == '原始') & (combined_df['事件數'] >= 8)].iloc[0] if not combined_df[(combined_df['版本'] == '原始') & (combined_df['事件數'] >= 8)].empty else None
+best_yoy = combined_df[(combined_df['版本'] == '年增') & (combined_df['事件數'] >= 8)].iloc[0] if not combined_df[(combined_df['版本'] == '年增') & (combined_df['事件數'] >= 8)].empty else None
+
 best_raw_window = int(best_raw['window']) if best_raw is not None else chart_winrolling_value
 best_yoy_window = int(best_yoy['window']) if best_yoy is not None else chart_winrolling_value
 
+
 st.divider()
-st.subheader("Each breath series: Levels (rolling mean ±σ) and YoY (brush to set time window)")
+st.subheader("指標原始數據與移動平均")
 alt.data_transformers.disable_max_rows()
 
 sigma_levels = [0.5, 1.0, 1.5, 2.0]
@@ -471,13 +556,14 @@ def levels_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value:
     return alt.vconcat(upper, lower).resolve_scale(y="independent")
 
 def yoy_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value: int):
-    yoy = s.pct_change(12) * 100.0
+    yoy = s / s.shift(12) # Use ratio for YoY calculation as in the original logic
+    yoy.dropna(inplace=True)
     yoy_mean = yoy.rolling(winrolling_value).mean()
     yoy_std = yoy.rolling(winrolling_value).std()
 
     df_yoy = pd.DataFrame({
         "Date": yoy.index,
-        "YoY (%)": yoy.values,
+        "YoY": yoy.values,
         "Mean": yoy_mean.values,
     })
     for m in sigma_levels:
@@ -492,18 +578,18 @@ def yoy_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value: in
         .mark_line()
         .encode(
             x=alt.X("Date:T", title="Date"),
-            y=alt.Y("Value:Q", title="YoY (%)"),
+            y=alt.Y("Value:Q", title="YoY Ratio"),
             color=alt.Color("Series:N", legend=alt.Legend(orient="top")),
             tooltip=[alt.Tooltip("Date:T"), "Series:N", alt.Tooltip("Value:Q", format=".2f")],
         )
         .transform_filter(brush)
         .properties(title=f"{name} ({sid}) | YoY with {winrolling_value}-period rolling mean ±σ", height=320)
     )
-    zero_line = alt.Chart(pd.DataFrame({"y":[0]})).mark_rule(strokeDash=[4,4]).encode(y="y:Q")
+    zero_line = alt.Chart(pd.DataFrame({"y":[1]})).mark_rule(strokeDash=[4,4]).encode(y="y:Q")
     lower = (
         alt.Chart(df_yoy)
         .mark_area(opacity=0.4)
-        .encode(x=alt.X("Date:T", title=""), y=alt.Y("YoY (%):Q", title=""))
+        .encode(x=alt.X("Date:T", title=""), y=alt.Y("YoY:Q", title=""))
         .properties(height=60)
         .add_selection(brush)
     )
@@ -516,11 +602,11 @@ if df_target is None or df_target.empty:
     st.info(f"No data for series {sid}, skipping.")
 else:
     s = df_target.iloc[:,0].astype(float)
-    with st.expander(f"Series: {selected_variable_name} ({sid})", expanded=True):
+    with st.expander(f"圖表分析：{selected_variable_name} ({sid})", expanded=True):
         colA, colB = st.columns(2)
         with colA:
-            st.caption(f"Levels rolling window = {best_raw_window}")
+            st.caption(f"使用最佳原始版本 window = {best_raw_window}")
             st.altair_chart(levels_chart_with_brush(s, sid, selected_variable_name, best_raw_window), use_container_width=True)
         with colB:
-            st.caption(f"YoY rolling window = {best_yoy_window}")
+            st.caption(f"使用最佳年增版本 window = {best_yoy_window}")
             st.altair_chart(yoy_chart_with_brush(s, sid, selected_variable_name, best_yoy_window), use_container_width=True)
