@@ -430,7 +430,7 @@ if not summary_yoy_df.empty:
     by_cols = [c for c in ["得分","事件數"] if c in summary_yoy_df.columns]
     summary_yoy_df = summary_yoy_df.sort_values(by=by_cols, ascending=False, na_position="last").reset_index(drop=True)
 
-# ===== NEW: Interactive Tables and Plots =====
+# ===== Interactive Tables and Plots =====
 def plot_mean_curve(finalb_df, title):
     if finalb_df is None or "mean" not in finalb_df.columns:
         st.info(f"無 {title} 曲線資料。")
@@ -468,9 +468,12 @@ st.dataframe(
     key="raw_selection"
 )
 
-# 檢查是否有在 "原始版本" 表格中選取某列
-if "raw_selection" in st.session_state and st.session_state.raw_selection['rows']:
-    selected_index = st.session_state.raw_selection['rows'][0]
+# 使用 .get() 安全地存取 session_state，避免 KeyError
+selection_raw = st.session_state.get("raw_selection")
+
+# 檢查 selection_raw 是否存在，且其 'rows' 鍵對應的 list 不為空
+if selection_raw and selection_raw.get("rows"):
+    selected_index = selection_raw["rows"][0]
     selected_row = summary_raw_df.iloc[selected_index]
     selected_std = selected_row['std']
     selected_window = selected_row['window']
@@ -504,9 +507,11 @@ st.dataframe(
     key="yoy_selection"
 )
 
-# 檢查是否有在 "年增版本" 表格中選取某列
-if "yoy_selection" in st.session_state and st.session_state.yoy_selection['rows']:
-    selected_index = st.session_state.yoy_selection['rows'][0]
+# 同樣地，安全地存取年增版本的選擇狀態
+selection_yoy = st.session_state.get("yoy_selection")
+
+if selection_yoy and selection_yoy.get("rows"):
+    selected_index = selection_yoy["rows"][0]
     selected_row = summary_yoy_df.iloc[selected_index]
     selected_std = selected_row['std']
     selected_window = selected_row['window']
