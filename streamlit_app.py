@@ -311,125 +311,139 @@ if not results_flat:
 
 
 
-# ===== 產出總覽表（每一列是一個 std×window）=====
-summary_rows = []
+
+# ===== 產出總覽表（拆成「原始」與「年增」兩張表）=====
+summary_rows_raw = []
+summary_rows_yoy = []
 required_keys = ["series_id","std","winrolling","times1","pre1","prewin1","after1","afterwin1",
                  "times2","pre2","after2","effective1","effective2"]  # score1/score2 可由 after-pre 回推
 
+def _to_float(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
+
 for r in results_flat:
-    # 檢查必要欄位
     missing = [k for k in required_keys if k not in r]
-    # 回推 score1/score2
-    def _to_float(x):
-        try:
-            return float(x)
-        except Exception:
-            return None
+    if missing:
+        st.warning(f"結果缺少欄位 {missing}，已以空值代替（std={r.get('std','?')}, window={r.get('winrolling','?')})")
+    # 原始版
     pre1_val, after1_val = _to_float(r.get("pre1")), _to_float(r.get("after1"))
-    pre2_val, after2_val = _to_float(r.get("pre2")), _to_float(r.get("after2"))
     score1_val = r.get("score1", None)
-    score2_val = r.get("score2", None)
     if score1_val is None and pre1_val is not None and after1_val is not None:
         score1_val = after1_val - pre1_val
-    if score2_val is None and pre2_val is not None and after2_val is not None:
-        score2_val = after2_val - pre2_val
-
-    if missing:
-        # 僅在關鍵欄位缺失時警告（score 不列入警告）
-        st.warning(f"結果缺少欄位 {missing}，已以空值代替（std={r.get('std','?')}, window={r.get('winrolling','?')})")
-
-    summary_rows.append({
+    summary_rows_raw.append({
         "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
         "ID": r.get("series_id", None),
         "std": r.get("std", None),
         "window": r.get("winrolling", None),
-        "事件數(原始)": r.get("times1", None),
-        "前12m均值%(原始)": pre1_val,
-        "後12m均值%(原始)": after1_val,
-        "勝率前(原始)": r.get("prewin1", None),
-        "勝率後(原始)": r.get("afterwin1", None),
-        "得分(原始)": score1_val,
-        "事件數(年增)": r.get("times2", None),
-        "前12m均值%(年增)": pre2_val,
-        "後12m均值%(年增)": after2_val,
-        "得分(年增)": score2_val,
-        "有效(原始)": r.get("effective1", None),
-        "有效(年增)": r.get("effective2", None),
+        "事件數": r.get("times1", None),
+        "前12m均值%": pre1_val,
+        "後12m均值%": after1_val,
+        "勝率前": r.get("prewin1", None),
+        "勝率後": r.get("afterwin1", None),
+        "得分": score1_val,
+        "有效": r.get("effective1", None),
+    })
+    # 年增版
+    pre2_val, after2_val = _to_float(r.get("pre2")), _to_float(r.get("after2"))
+    score2_val = r.get("score2", None)
+    if score2_val is None and pre2_val is not None and after2_val is not None:
+        score2_val = after2_val - pre2_val
+    summary_rows_yoy.append({
+        "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
+        "ID": r.get("series_id", None),
+        "std": r.get("std", None),
+        "window": r.get("winrolling", None),
+        "事件數": r.get("times2", None),
+        "前12m均值%": pre2_val,
+        "後12m均值%": after2_val,
+        "得分": score2_val,
+        "有效": r.get("effective2", None),
     })
 
-summary_df = pd.DataFrame(summary_rows)
-# 型別轉換
-for col in ["事件數(原始)","前12m均值%(原始)","後12m均值%(原始)","勝率前(原始)","勝率後(原始)","得分(原始)",
-            "事件數(年增)","前12m均值%(年增)","後12m均值%(年增)","得分(年增)"]:
-    if col in summary_df.columns:
-        summary_df[col] = pd.to_numeric(summary_df[col], errors="coerce")
+summary_raw_df = pd.DataFrame(summary_rows_raw)
+summary_yoy_df = pd.DataFrame(summary_rows_yoy)
 
-# 排序
-if set(["得分(年增)","得分(原始)"]).issubset(summary_df.columns):
-    summary_df = summary_df.sort_values(by=["得分(年增)", "得分(原始)"], ascending=False, na_position="last")
+# 型別轉換（可排序）
+for df in (summary_raw_df, summary_yoy_df):
+    for col in ["事件數","前12m均值%","後12m均值%","勝率前","勝率後","得分"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-st.subheader("所有 std × window 組合結果（總覽）")
-st.dataframe(summary_df, use_container_width=True)
+# 各自排序
+if not summary_raw_df.empty:
+    by_cols = [c for c in ["得分","事件數"] if c in summary_raw_df.columns]
+    summary_raw_df = summary_raw_df.sort_values(by=by_cols, ascending=False, na_position="last")
+if not summary_yoy_df.empty:
+    by_cols = [c for c in ["得分","事件數"] if c in summary_yoy_df.columns]
+    summary_yoy_df = summary_yoy_df.sort_values(by=by_cols, ascending=False, na_position="last")
+
+st.subheader("原始版本：所有 std × window 組合結果")
+st.dataframe(summary_raw_df, use_container_width=True)
+
+st.subheader("年增版本：所有 std × window 組合結果")
+st.dataframe(summary_yoy_df, use_container_width=True)
 
 
 
-# 顯示最佳組合的細節（可省略）
-if not summary_df.empty:
-    best = summary_df.iloc[0]
-    st.markdown(f"### 最佳組合：std = **{best['std']}**, window = **{int(best['window'])}**")
-    # 找到對應 result
-    best_r = None
-    for r in results_flat:
-        if r["std"] == best["std"] and r["winrolling"] == best["window"]:
-            best_r = r
-            break
+
+
+# 顯示最佳組合的細節（原始/年增 各一張）
+def plot_mean_curve(finalb_df, title):
+    if finalb_df is None or "mean" not in finalb_df.columns:
+        st.info(f"{title} 無曲線資料。")
+        return
+    y = finalb_df["mean"].values
+    n = len(y)
+    half = n // 2
+    x = np.arange(-half, n - half)   # 0 對齊事件當月
+    fig, ax = plt.subplots(figsize=(6, 5))
+    ax.plot(x, y, label=title)
+    ax.axvline(0, linestyle='--')
+    xlim = (-15, 15)
+    ax.set_xlim(xlim)
+    mask = (x >= xlim[0]) & (x <= xlim[1])
+    if np.any(mask):
+        ymin = float(np.min(y[mask])) * 0.99
+        ymax = float(np.max(y[mask])) * 1.01
+        if ymin == ymax:
+            ymin -= 1.0
+            ymax += 1.0
+        ax.set_ylim(ymin, ymax)
+    ax.set_xlabel('Months')
+    ax.set_ylabel('Index (100 = 事件當月)')
+    st.pyplot(fig, use_container_width=True)
+
+# 原始最佳
+if 'summary_raw_df' in locals() and not summary_raw_df.empty:
+    best_raw = summary_raw_df.iloc[0]
+    st.markdown(f"### 原始版本最佳組合：std = **{best_raw['std']}**, window = **{int(best_raw['window'])}**")
+    best_r_raw = next((r for r in results_flat if r.get('std')==best_raw['std'] and r.get('winrolling')==best_raw['window']), None)
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("#### 原始值版本（最佳組合）")
-        if best_r and best_r.get("resulttable1") is not None:
-            st.dataframe(best_r["resulttable1"], use_container_width=True)
+        if best_r_raw and best_r_raw.get("resulttable1") is not None:
+            st.dataframe(best_r_raw["resulttable1"], use_container_width=True)
         else:
             st.info("無原始值版本表格。")
     with col2:
-        st.markdown("#### 年增率版本（最佳組合）")
-        if best_r and best_r.get("resulttable2") is not None:
-            st.dataframe(best_r["resulttable2"], use_container_width=True)
+        plot_mean_curve(best_r_raw.get("finalb1") if best_r_raw else None, "Final b1")
+
+# 年增最佳
+if 'summary_yoy_df' in locals() and not summary_yoy_df.empty:
+    best_yoy = summary_yoy_df.iloc[0]
+    st.markdown(f"### 年增版本最佳組合：std = **{best_yoy['std']}**, window = **{int(best_yoy['window'])}**")
+    best_r_yoy = next((r for r in results_flat if r.get('std')==best_yoy['std'] and r.get('winrolling')==best_yoy['window']), None)
+    col3, col4 = st.columns(2)
+    with col3:
+        if best_r_yoy and best_r_yoy.get("resulttable2") is not None:
+            st.dataframe(best_r_yoy["resulttable2"], use_container_width=True)
         else:
             st.info("無年增率版本表格。")
+    with col4:
+        plot_mean_curve(best_r_yoy.get("finalb2") if best_r_yoy else None, "Final b2")
 
-    # 繪圖（均值曲線）
-    def plot_mean_curve(finalb_df, title):
-        if finalb_df is None or "mean" not in finalb_df.columns:
-            st.info(f"{title} 無曲線資料。")
-            return
-        y = finalb_df["mean"].values
-        n = len(y)
-        half = n // 2
-        x = np.arange(-half, n - half)   # 0 對齊事件當月
-        fig, ax = plt.subplots(figsize=(6, 5))
-        ax.plot(x, y, label=title)
-        ax.axvline(0, linestyle='--')
-        xlim = (-15, 15)
-        ax.set_xlim(xlim)
-        mask = (x >= xlim[0]) & (x <= xlim[1])
-        if np.any(mask):
-            ymin = float(np.min(y[mask])) * 0.99
-            ymax = float(np.max(y[mask])) * 1.01
-            if ymin == ymax:
-                ymin -= 1.0
-                ymax += 1.0
-            ax.set_ylim(ymin, ymax)
-        ax.set_xlabel('Months')
-        ax.set_ylabel('Index (100 = 事件當月)')
-        st.pyplot(fig, use_container_width=True)
-
-    colp1, colp2 = st.columns(2)
-    with colp1:
-        st.markdown("##### 原始值版本均值曲線")
-        plot_mean_curve(best_r.get("finalb1"), "Final b1")
-    with colp2:
-        st.markdown("##### 年增率版本均值曲線")
-        plot_mean_curve(best_r.get("finalb2"), "Final b2")
 
 # ===== Plot by series_ids_text: Levels & YoY (brush to set x-range; y auto-rescales) =====
 st.divider()
