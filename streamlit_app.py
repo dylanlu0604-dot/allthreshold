@@ -535,31 +535,27 @@ if selection_yoy and selection_yoy.get("rows"):
                 plot_mean_curve(selected_result_yoy.get("finalb2"), "事件前後股價平均走勢 (年增)")
 
 # ===== Plot by series_ids_text: Levels & YoY =====
-# --- 將最佳組合作為圖表的 rolling 參考（兩者可能不同） ---
-best_raw_window = None
-best_yoy_window = None
-try:
-    if not summary_raw_df.empty and "事件數" in summary_raw_df.columns:
-        THRESHOLD_EVENTS = 8
-        raw_candidates = summary_raw_df[summary_raw_df["事件數"] >= THRESHOLD_EVENTS]
-        if not raw_candidates.empty:
-            best_raw_window = int(raw_candidates.iloc[0]['window'])
-    if not summary_yoy_df.empty and "事件數" in summary_yoy_df.columns:
-        THRESHOLD_EVENTS = 8
-        yoy_candidates = summary_yoy_df[summary_yoy_df["事件數"] >= THRESHOLD_EVENTS]
-        if not yoy_candidates.empty:
-            best_yoy_window = int(yoy_candidates.iloc[0]['window'])
-except (Exception, KeyError):
-    pass
-# Fallback：若無最佳，使用原本 chart_winrolling_value
-if 'chart_winrolling_value' in locals():
-    if best_raw_window is None:
-        best_raw_window = chart_winrolling_value
-    if best_yoy_window is None:
-        best_yoy_window = chart_winrolling_value
-
 st.divider()
-st.subheader("可調整時間區間的序列圖：Levels (rolling mean ±σ) and YoY")
+st.subheader("可調整時間區間的序列圖 (根據上方表格點選的組合更新)")
+
+# --- 根據表格點選結果，設定 Altair 圖表的 rolling window ---
+# 預設值為側邊欄設定的 chart_winrolling_value
+winrolling_for_levels = chart_winrolling_value
+winrolling_for_yoy = chart_winrolling_value
+
+# 如果使用者在「原始版本」表格中點選了某個組合，則使用該組合的 window
+selection_raw = st.session_state.get("raw_selection")
+if selection_raw and selection_raw.get("rows"):
+    selected_index = selection_raw["rows"][0]
+    if selected_index < len(summary_raw_df):
+        winrolling_for_levels = int(summary_raw_df.iloc[selected_index]['window'])
+
+# 如果使用者在「年增版本」表格中點選了某個組合，則使用該組合的 window
+selection_yoy = st.session_state.get("yoy_selection")
+if selection_yoy and selection_yoy.get("rows"):
+    selected_index = selection_yoy["rows"][0]
+    if selected_index < len(summary_yoy_df):
+        winrolling_for_yoy = int(summary_yoy_df.iloc[selected_index]['window'])
 
 alt.data_transformers.disable_max_rows()
 sigma_levels = [0.5, 1.0, 1.5, 2.0]
@@ -606,11 +602,10 @@ def yoy_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value: in
     ).properties(height=60).add_params(brush))
     return alt.vconcat(upper + zero_line, lower)
 
-# 根據最佳組合決定各圖的 rolling 視窗
-winrolling_for_levels = best_raw_window if 'best_raw_window' in locals() and best_raw_window else chart_winrolling_value
-winrolling_for_yoy = best_yoy_window if 'best_yoy_window' in locals() and best_yoy_window else chart_winrolling_value
+# 根據選擇的變數 ID 抓取資料並繪圖
 sid = id_name_map[id_name_map['繁中名稱'] == selected_variable_name]['ID'].iloc[0]
 df_target = mm(int(sid), "MS", f"series_{sid}", k)
+
 if df_target is None or df_target.empty:
     st.info(f"無 {sid} 的資料，略過繪圖。")
 else:
