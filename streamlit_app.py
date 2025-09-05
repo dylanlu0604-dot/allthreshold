@@ -98,7 +98,10 @@ def mm(series_id: int, frequency: str, name: str, k: str) -> pd.DataFrame | None
     return None
 
 def find_row_number_for_date(df_obj: pd.DataFrame, specific_date: pd.Timestamp) -> int:
-    return df_obj.index.get_loc(pd.Timestamp(specific_date))
+    try:
+        return df_obj.index.get_loc(pd.Timestamp(specific_date))
+    except KeyError:
+        return -1 # Return an invalid index if not found
 
 def _condition(df: pd.DataFrame, std: float, winrolling: int, mode: str) -> pd.Series:
     if mode == "Greater":
@@ -114,14 +117,14 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
         df1 = mm(code1, "MS", x1, k)
         df2 = mm(code2, "MS", x2, k)
         if df1 is None or df2 is None:
-            st.warning(f"series_id {variable_id} 或 target_id {target_id} 取檔失敗。")
             return results
         alldf = pd.concat([df1, df2], axis=1).resample("MS").asfreq().ffill()
         timeforward, timepast = 31, 31
 
-        def calculate_performance(df_orig, condition_df, alldf_ref):
+        def calculate_performance(condition_df, alldf_ref):
             finalb_dates: list[pd.Timestamp] = []
-            for date in condition_df.index:
+            valid_indices = condition_df.dropna().index
+            for date in valid_indices:
                 if not finalb_dates or ((date - finalb_dates[-1]).days / 30) >= months_threshold:
                     finalb_dates.append(date)
 
@@ -131,7 +134,7 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
             dfs = []
             for dt in finalb_dates:
                 a = find_row_number_for_date(alldf_ref, dt)
-                if a - timepast < 0 or a + timeforward >= len(alldf_ref):
+                if a == -1 or a - timepast < 0 or a + timeforward > len(alldf_ref):
                     continue
                 temp_df = alldf_ref["index"].iloc[a - timepast : a + timeforward].to_frame(name=dt).reset_index(drop=True)
                 dfs.append(temp_df)
@@ -146,32 +149,32 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
             offsets = [-12, -6, 0, 6, 12]
             table = pd.concat([finalb.iloc[timepast + off] for off in offsets], axis=1)
             table.columns = [f"{off}m" for off in offsets]
-            resulttable = table.iloc[:-1].copy()
+            
+            resulttable = table.iloc[:-1].copy() # Exclude the 'mean' row for now
             perc_df = pd.DataFrame([(resulttable > 100).mean() * 100], index=["勝率"])
-            resulttable = pd.concat([resulttable, perc_df, table.iloc[-1:]])
+            resulttable_final = pd.concat([resulttable, perc_df, table.iloc[-1:]]) # Add it back at the end
 
-            times = len(resulttable.columns)
-            pre = resulttable.loc["mean", "-12m"] - 100 if "mean" in resulttable.index else 0
-            prewin = resulttable.loc["勝率", "-12m"] if "勝率" in resulttable.index else 0
-            after = resulttable.loc["mean", "12m"] if "mean" in resulttable.index else 0
-            afterwin = resulttable.loc["勝率", "12m"] if "勝率" in resulttable.index else 0
-            return resulttable, finalb, times, pre, prewin, after, afterwin
+            times = len(resulttable) # Number of events is the number of rows before adding 勝率 and mean
+            pre = resulttable_final.loc["mean", "-12m"] - 100
+            prewin = resulttable_final.loc["勝率", "-12m"]
+            after = resulttable_final.loc["mean", "12m"] - 100
+            afterwin = resulttable_final.loc["勝率", "12m"]
+            return resulttable_final, finalb, times, pre, prewin, after, afterwin
 
         # 原始版
         df1_proc = alldf[[x1, x2]].copy()
         df1_proc["Rolling_mean"] = df1_proc[x1].rolling(window=winrolling_value).mean()
         df1_proc["Rolling_std"] = df1_proc[x1].rolling(window=winrolling_value).std()
         filtered_df1 = df1_proc[_condition(df1_proc, std_value, winrolling_value, mode)]
-        resulttable1, finalb1, times1, pre1, prewin1, after1, afterwin1 = calculate_performance(df1_proc, filtered_df1, alldf)
+        resulttable1, finalb1, times1, pre1, prewin1, after1, afterwin1 = calculate_performance(filtered_df1, alldf)
 
         # 年增版
         df2_proc = alldf[[x1, x2]].copy()
         df2_proc[x1] = df2_proc[x1] / df2_proc[x1].shift(12)
-        df2_proc.dropna(inplace=True)
         df2_proc["Rolling_mean"] = df2_proc[x1].rolling(window=winrolling_value).mean()
         df2_proc["Rolling_std"] = df2_proc[x1].rolling(window=winrolling_value).std()
         filtered_df2 = df2_proc[_condition(df2_proc, std_value, winrolling_value, mode)]
-        resulttable2, finalb2, times2, pre2, prewin2, after2, afterwin2 = calculate_performance(df2_proc, filtered_df2, alldf)
+        resulttable2, finalb2, times2, pre2, prewin2, after2, afterwin2 = calculate_performance(filtered_df2, alldf)
 
         results.append({
             "series_id": variable_id, "mode": mode, "std": std_value, "winrolling": winrolling_value,
@@ -192,19 +195,21 @@ tasks = [(sid, selected_target_id, s, w, k, m, months_gap_threshold) for sid, s,
 results_flat = []
 if Parallel is not None:
     num_cores = min(4, multiprocessing.cpu_count())
-    results_nested = Parallel(n_jobs=num_cores)(delayed(process_series)(*t) for t in tasks)
+    with st.spinner(f"正在使用 {num_cores} 核心進行計算..."):
+        results_nested = Parallel(n_jobs=num_cores)(delayed(process_series)(*t) for t in tasks)
     results_flat = [item for sublist in results_nested for item in sublist]
 else:
-    st.warning("`joblib` not found. Running in single-thread mode.")
-    for t in tasks:
-        results_flat.extend(process_series(*t))
+    st.warning("`joblib` 未安裝，將使用單執行緒模式。")
+    with st.spinner("正在進行計算..."):
+        for t in tasks:
+            results_flat.extend(process_series(*t))
 
 if not results_flat:
-    st.info("No results to display. Adjust parameters or check data availability.")
+    st.info("尚無結果可顯示。請調整參數或確認資料是否充足。")
     st.stop()
 
 def classify_signal(pre, after, prewin, afterwin, times):
-    if any(v is None for v in [pre, after, prewin, afterwin, times]) or times <= 8:
+    if any(v is None for v in [pre, after, prewin, afterwin, times]) or not isinstance(times, (int, float)) or times <= 8:
         return "🚫 不是有效訊號"
     win_sum = prewin + afterwin
     if pre < 0 and after < 0 and win_sum < 70: return "🐮 牛市訊號"
@@ -212,7 +217,7 @@ def classify_signal(pre, after, prewin, afterwin, times):
     return "🚫 不是有效訊號"
 
 def compute_score(pre, after, prewin, afterwin, times, label):
-    if "不是有效訊號" in label: return 0.0
+    if "不是有效訊號" in label or any(v is None for v in [pre, after, prewin, afterwin, times]): return 0.0
     if "🐮" in label: return pre + after + (prewin - 50) + (afterwin - 50) + times
     if "🐻" in label: return -pre - after - (prewin - 50) - (afterwin - 50) + times
     return 0.0
@@ -220,22 +225,16 @@ def compute_score(pre, after, prewin, afterwin, times, label):
 all_rows = []
 for r in results_flat:
     for v_num, version in [(1, "原始"), (2, "年增")]:
-        pre = r.get(f"pre{v_num}")
-        after = r.get(f"after{v_num}")
-        prewin = r.get(f"prewin{v_num}")
-        afterwin = r.get(f"afterwin{v_num}")
-        times = r.get(f"times{v_num}")
+        pre, after, prewin, afterwin, times = (r.get(f"pre{v_num}"), r.get(f"after{v_num}"), r.get(f"prewin{v_num}"), r.get(f"afterwin{v_num}"), r.get(f"times{v_num}"))
         label = classify_signal(pre, after, prewin, afterwin, times)
         score = compute_score(pre, after, prewin, afterwin, times, label)
         all_rows.append({
-            "版本": version,
-            "系列": get_name_from_id(r["series_id"], str(r["series_id"])),
-            "std": r["std"], "window": r["winrolling"], "觸發": r["mode"],
-            "事件數": times, "前12m均值%": pre, "後12m均值%": after,
-            "勝率前": prewin, "勝率後": afterwin, "得分": score, "有效": label,
+            "版本": version, "系列": get_name_from_id(r["series_id"], str(r["series_id"])), "std": r["std"], 
+            "window": r["winrolling"], "觸發": r["mode"], "事件數": times, "前12m均值%": pre, 
+            "後12m均值%": after, "勝率前": prewin, "勝率後": afterwin, "得分": score, "有效": label,
         })
 
-combined_df = pd.DataFrame(all_rows).sort_values(by=["得分", "事件數"], ascending=False, na_position="last")
+combined_df = pd.DataFrame(all_rows).sort_values(by=["得分", "事件數"], ascending=False, na_position="last").reset_index(drop=True)
 first_cols = ['版本', '系列', 'std', 'window', '觸發', '有效', '得分', '事件數']
 other_cols = [c for c in combined_df.columns if c not in first_cols]
 combined_df = combined_df[first_cols + other_cols]
@@ -243,12 +242,23 @@ combined_df = combined_df[first_cols + other_cols]
 st.subheader("所有組合結果分析")
 st.caption("點選任一列，即可在下方查看該組合的詳細數據與績效走勢圖。")
 st.dataframe(
-    combined_df, key="selection", on_select="rerun", selection_mode="single-row",
+    combined_df.style.format({
+        "std": "{:.1f}", "得分": "{:.2f}", "前12m均值%": "{:.2f}", "後12m均值%": "{:.2f}",
+        "勝率前": "{:.2f}%", "勝率後": "{:.2f}%"
+    }), 
+    key="selection", on_select="rerun", selection_mode="single-row",
     use_container_width=True, hide_index=True, height=400
 )
 
-selection = st.session_state.get("selection")
-selected_row_data = combined_df.iloc[selection['rows'][0]] if selection and selection['rows'] else None
+# --- MODIFICATION START: Robust selection handling ---
+selected_row_data = None
+selection_state = st.session_state.get("selection")
+
+if selection_state and isinstance(selection_state.get("rows"), list) and selection_state["rows"]:
+    selected_index = selection_state["rows"][0]
+    if selected_index < len(combined_df):
+        selected_row_data = combined_df.iloc[selected_index]
+# --- MODIFICATION END ---
 
 st.divider()
 st.subheader("選定組合的詳細結果")
@@ -266,27 +276,29 @@ else:
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("##### **績效摘要表**")
-        table_data = matching_result.get(result_key_table)
+        table_data = matching_result.get(result_key_table) if matching_result else None
         if table_data is not None:
             st.dataframe(table_data.style.format("{:.2f}"), use_container_width=True)
         else:
             st.info("無表格資料。")
     with col2:
         st.markdown("##### **事件前後平均走勢**")
-        curve_data = matching_result.get(result_key_curve)
+        curve_data = matching_result.get(result_key_curve) if matching_result else None
         if curve_data is not None and "mean" in curve_data.columns:
             y, n = curve_data["mean"].values, len(curve_data)
             x = np.arange(-n//2, n - n//2)
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(6, 5))
             ax.plot(x, y)
-            ax.axvline(0, color='r', linestyle='--'); ax.axhline(100, color='grey', linestyle=':')
+            ax.axvline(0, color='r', linestyle='--', linewidth=1); ax.axhline(100, color='grey', linestyle=':', linewidth=1)
             xlim = (-24, 24); ax.set_xlim(xlim)
             mask = (x >= xlim[0]) & (x <= xlim[1])
             if np.any(mask):
-                ymin, ymax = np.min(y[mask]) * 0.98, np.max(y[mask]) * 1.02
-                ax.set_ylim(ymin, ymax if ymax > ymin else ymax + 1)
+                valid_y = y[mask]
+                if len(valid_y) > 0:
+                    ymin, ymax = np.min(valid_y) * 0.98, np.max(valid_y) * 1.02
+                    ax.set_ylim(ymin, ymax if ymax > ymin else ymax + 1)
             ax.set_xlabel('相對於事件的月數'); ax.set_ylabel('標準化指數 (事件月 = 100)')
-            ax.grid(True, alpha=0.5)
+            ax.grid(True, alpha=0.5, linestyle='--')
             st.pyplot(fig, use_container_width=True)
         else:
             st.info("無曲線圖資料。")
@@ -297,29 +309,35 @@ alt.data_transformers.disable_max_rows()
 sigma_levels = [0.5, 1.0, 1.5, 2.0]
 
 def create_altair_chart(s: pd.Series, name: str, win: int, is_yoy: bool):
-    df = s.to_frame(name="value")
+    df = s.to_frame(name="value").dropna()
+    title_suffix = ""
     if is_yoy:
         df["value"] = df["value"] / df["value"].shift(12)
         df.dropna(inplace=True)
-        y_title = "YoY Ratio"
+        y_title, title_suffix = "YoY Ratio", "YoY"
     else:
         y_title = "Level"
     
     df["mean"] = df["value"].rolling(win).mean()
     df["std"] = df["value"].rolling(win).std()
     for m in sigma_levels:
-        df[f"+{m}σ"] = df["mean"] + m * df["std"]
-        df[f"-{m}σ"] = df["mean"] - m * df["std"]
+        df[f"mean+{m}σ"] = df["mean"] + m * df["std"]
+        df[f"mean-{m}σ"] = df["mean"] - m * df["std"]
     
     df_long = df.reset_index().melt("date", var_name="series", value_name="val").dropna()
     brush = alt.selection_interval(encodings=["x"])
     
-    upper = alt.Chart(df_long).mark_line().encode(
-        x='date:T', y='val:Q', color='series:N', tooltip=['date:T', 'series:N', 'val:Q']
-    ).transform_filter(brush).properties(title=f"{name} | {win}-period {'YoY' if is_yoy else 'Levels'}", height=300)
+    base = alt.Chart(df_long).encode(x='date:T')
+    lines = base.mark_line().encode(
+        y=alt.Y('val:Q', title=y_title), 
+        color='series:N', 
+        tooltip=['date:T', 'series:N', alt.Tooltip('val:Q', format='.2f')]
+    )
     
-    lower = alt.Chart(df_long).mark_area(opacity=0.5).encode(
-        x='date:T', y=alt.Y('val:Q', axis=None)
+    upper = lines.transform_filter(brush).properties(title=f"{name} | {win}-period {title_suffix} with rolling bands", height=300)
+    
+    lower = base.mark_area(opacity=0.5).encode(
+        y=alt.Y('val:Q', axis=None, title=None)
     ).add_selection(brush).properties(height=60)
     
     return alt.vconcat(upper, lower).resolve_scale(y="independent")
@@ -327,8 +345,12 @@ def create_altair_chart(s: pd.Series, name: str, win: int, is_yoy: bool):
 df_source = mm(selected_variable_id, "MS", "series", k)
 if df_source is not None and not df_source.empty:
     s = df_source.iloc[:, 0].astype(float)
-    best_raw = combined_df[(combined_df['版本'] == '原始') & (combined_df['事件數'] > 8)].iloc[0] if not combined_df[(combined_df['版本'] == '原始') & (combined_df['事件數'] > 8)].empty else None
-    best_yoy = combined_df[(combined_df['版本'] == '年增') & (combined_df['事件數'] > 8)].iloc[0] if not combined_df[(combined_df['版本'] == '年增') & (combined_df['事件數'] > 8)].empty else None
+    
+    filtered_raw = combined_df[(combined_df['版本'] == '原始') & (combined_df['事件數'] > 8)]
+    best_raw = filtered_raw.iloc[0] if not filtered_raw.empty else None
+    
+    filtered_yoy = combined_df[(combined_df['版本'] == '年增') & (combined_df['事件數'] > 8)]
+    best_yoy = filtered_yoy.iloc[0] if not filtered_yoy.empty else None
     
     win_raw = int(best_raw['window']) if best_raw is not None else chart_winrolling_value
     win_yoy = int(best_yoy['window']) if best_yoy is not None else chart_winrolling_value
@@ -342,4 +364,4 @@ if df_source is not None and not df_source.empty:
             st.caption(f"使用最佳年增版本 window = {win_yoy}")
             st.altair_chart(create_altair_chart(s, selected_variable_name, win_yoy, is_yoy=True), use_container_width=True)
 else:
-    st.info(f"No data for series {selected_variable_id}, skipping charts.")
+    st.info(f"無法獲取序列 {selected_variable_id} 的數據，圖表部分已跳過。")
