@@ -1,5 +1,6 @@
 import os
 import time
+import math # <--- 引入 math 模組
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -468,33 +469,33 @@ st.dataframe(
     key="raw_selection"
 )
 
-# 使用 .get() 安全地存取 session_state，避免 KeyError
 selection_raw = st.session_state.get("raw_selection")
-
-# 檢查 selection_raw 是否存在，且其 'rows' 鍵對應的 list 不為空
 if selection_raw and selection_raw.get("rows"):
     selected_index = selection_raw["rows"][0]
-    selected_row = summary_raw_df.iloc[selected_index]
-    selected_std = selected_row['std']
-    selected_window = selected_row['window']
+    if selected_index < len(summary_raw_df):
+        selected_row = summary_raw_df.iloc[selected_index]
+        selected_std = selected_row['std']
+        selected_window = selected_row['window']
 
-    # 從完整結果中找到對應的資料
-    selected_result_raw = next(
-        (r for r in results_flat if r.get('std') == selected_std and r.get('winrolling') == selected_window),
-        None
-    )
-    
-    if selected_result_raw:
-        with st.container(border=True):
-            st.markdown(f"#### 原始版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
-            col1, col2 = st.columns(2)
-            with col1:
-                if selected_result_raw.get("resulttable1") is not None:
-                    st.dataframe(selected_result_raw["resulttable1"], use_container_width=True)
-                else:
-                    st.info("無詳細表格資料。")
-            with col2:
-                plot_mean_curve(selected_result_raw.get("finalb1"), "事件前後股價平均走勢")
+        # --- 使用更穩健的方式尋找匹配的結果 ---
+        selected_result_raw = None
+        for r in results_flat:
+            if r.get('std') is not None and r.get('winrolling') is not None:
+                if math.isclose(r.get('std'), selected_std) and int(r.get('winrolling')) == int(selected_window):
+                    selected_result_raw = r
+                    break # 找到後即停止搜尋
+        
+        if selected_result_raw:
+            with st.container(border=True):
+                st.markdown(f"#### 原始版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if selected_result_raw.get("resulttable1") is not None:
+                        st.dataframe(selected_result_raw["resulttable1"], use_container_width=True)
+                    else:
+                        st.info("無詳細表格資料。")
+                with col2:
+                    plot_mean_curve(selected_result_raw.get("finalb1"), "事件前後股價平均走勢")
 
 # --- 年增版本互動區 ---
 st.subheader("年增版本：所有 std × window 組合結果")
@@ -507,50 +508,48 @@ st.dataframe(
     key="yoy_selection"
 )
 
-# 同樣地，安全地存取年增版本的選擇狀態
 selection_yoy = st.session_state.get("yoy_selection")
-
 if selection_yoy and selection_yoy.get("rows"):
     selected_index = selection_yoy["rows"][0]
-    selected_row = summary_yoy_df.iloc[selected_index]
-    selected_std = selected_row['std']
-    selected_window = selected_row['window']
+    if selected_index < len(summary_yoy_df):
+        selected_row = summary_yoy_df.iloc[selected_index]
+        selected_std = selected_row['std']
+        selected_window = selected_row['window']
+        
+        # --- 使用更穩健的方式尋找匹配的結果 ---
+        selected_result_yoy = None
+        for r in results_flat:
+            if r.get('std') is not None and r.get('winrolling') is not None:
+                if math.isclose(r.get('std'), selected_std) and int(r.get('winrolling')) == int(selected_window):
+                    selected_result_yoy = r
+                    break # 找到後即停止搜尋
 
-    # 從完整結果中找到對應的資料
-    selected_result_yoy = next(
-        (r for r in results_flat if r.get('std') == selected_std and r.get('winrolling') == selected_window),
-        None
-    )
-    
-    if selected_result_yoy:
-        with st.container(border=True):
-            st.markdown(f"#### 年增版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
-            col3, col4 = st.columns(2)
-            with col3:
-                if selected_result_yoy.get("resulttable2") is not None:
-                    st.dataframe(selected_result_yoy["resulttable2"], use_container_width=True)
-                else:
-                    st.info("無詳細表格資料。")
-            with col4:
-                plot_mean_curve(selected_result_yoy.get("finalb2"), "事件前後股價平均走勢 (年增)")
+        if selected_result_yoy:
+            with st.container(border=True):
+                st.markdown(f"#### 年增版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
+                col3, col4 = st.columns(2)
+                with col3:
+                    if selected_result_yoy.get("resulttable2") is not None:
+                        st.dataframe(selected_result_yoy["resulttable2"], use_container_width=True)
+                    else:
+                        st.info("無詳細表格資料。")
+                with col4:
+                    plot_mean_curve(selected_result_yoy.get("finalb2"), "事件前後股價平均走勢 (年增)")
 
 # ===== Plot by series_ids_text: Levels & YoY =====
 st.divider()
 st.subheader("可調整時間區間的序列圖 (根據上方表格點選的組合更新)")
 
 # --- 根據表格點選結果，設定 Altair 圖表的 rolling window ---
-# 預設值為側邊欄設定的 chart_winrolling_value
 winrolling_for_levels = chart_winrolling_value
 winrolling_for_yoy = chart_winrolling_value
 
-# 如果使用者在「原始版本」表格中點選了某個組合，則使用該組合的 window
 selection_raw = st.session_state.get("raw_selection")
 if selection_raw and selection_raw.get("rows"):
     selected_index = selection_raw["rows"][0]
     if selected_index < len(summary_raw_df):
         winrolling_for_levels = int(summary_raw_df.iloc[selected_index]['window'])
 
-# 如果使用者在「年增版本」表格中點選了某個組合，則使用該組合的 window
 selection_yoy = st.session_state.get("yoy_selection")
 if selection_yoy and selection_yoy.get("rows"):
     selected_index = selection_yoy["rows"][0]
