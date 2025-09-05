@@ -1,3 +1,23 @@
+streamlit run your_app_name.py```
+
+這樣應該就能解決這個 `ModuleNotFoundError`，並且應用程式可以正常運行。
+
+---
+
+### 如果您無法或不想安裝 `streamlit-aggrid`
+
+如果您因為環境限制（例如在某些雲端平台）而無法安裝新套件，或者您只想使用 Streamlit 的內建功能，我們也可以退回使用 `st.dataframe`。
+
+以下是**不需要 `st_aggrid`** 的修改版程式碼。我會移除 `st_aggrid` 相關的程式碼，並改用 Streamlit 內建的 `st.dataframe` 搭配 `on_select` 功能來實現互動。
+
+**主要修改**：
+*   移除了 `from st_aggrid import ...` 這一行。
+*   將 `AgGrid` 的程式碼區塊替換為 `st.dataframe` 的程式碼區塊。
+*   調整了從 `st.session_state` 讀取點選列的方式。
+
+#### 替代方案：使用 Streamlit 內建功能的完整程式碼
+
+```python
 import os
 import time
 import numpy as np
@@ -9,7 +29,7 @@ from itertools import product
 import multiprocessing
 import io
 import altair as alt
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+# Removed: from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # Optional parallelism
 try:
@@ -384,62 +404,35 @@ st.subheader("所有組合結果分析")
 st.caption("點選下方任一列表格，即可在下方區塊查看該組合的詳細數據與績效走勢圖。")
 
 # Use st.dataframe with on_select to make it interactive
-# Note: Using AgGrid for a better experience as it keeps the selection visually.
-# If you don't have st_aggrid, you can replace this block with the st.dataframe version below.
-
-gb = GridOptionsBuilder.from_dataframe(combined_df)
-gb.configure_selection(selection_mode='single', use_checkbox=False)
-gb.configure_column("前12m均值%", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
-gb.configure_column("後12m均值%", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
-gb.configure_column("勝率前", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
-gb.configure_column("勝率後", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
-gb.configure_column("得分", type=["numericColumn", "numberColumnFilter", "customNumericFormat"], precision=2)
-gridOptions = gb.build()
-
-grid_response = AgGrid(
+st.dataframe(
     combined_df,
-    gridOptions=gridOptions,
-    update_mode=GridUpdateMode.SELECTION_CHANGED,
-    allow_unsafe_jscode=True,
-    height=400,
-    width='100%',
-    theme='streamlit' # or 'alpine', 'balham', 'material'
+    key="combined_selection",
+    on_select="rerun",
+    selection_mode="single-row",
+    use_container_width=True,
+    hide_index=True,
+    height=400
 )
 
-selected_rows = grid_response['selected_rows']
-
-# --- Alternative using st.dataframe (less visually clear which row is selected) ---
-# st.dataframe(
-#     combined_df,
-#     key="combined_selection",
-#     on_select="rerun",
-#     selection_mode="single-row",
-#     use_container_width=True,
-#     hide_index=True
-# )
-#
-# selection = st.session_state.get("combined_selection")
-# selected_rows = []
-# if selection and selection['rows']:
-#     idx = selection['rows'][0]
-#     selected_rows.append(combined_df.iloc[idx].to_dict())
-# ---------------------------------------------------------------------------------
+# Check the session_state for a selection event
+selection = st.session_state.get("combined_selection")
+selected_row_data = None
+if selection and selection['rows']:
+    selected_row_index = selection['rows'][0]
+    selected_row_data = combined_df.iloc[selected_row_index]
 
 
 st.divider()
 st.subheader("選定組合的詳細結果")
 
-if not selected_rows:
+if selected_row_data is None:
     st.info("請點選上方表格的任一列，以在此處查看詳細結果。")
 else:
-    # Get the data from the single selected row
-    selected_row = pd.DataFrame(selected_rows).iloc[0]
-
     # Extract parameters from the selected row
-    version = selected_row['版本']
-    std_val = selected_row['std']
-    win_val = selected_row['window']
-    mode_val = selected_row['觸發']
+    version = selected_row_data['版本']
+    std_val = selected_row_data['std']
+    win_val = selected_row_data['window']
+    mode_val = selected_row_data['觸發']
 
     # Determine which result keys to use based on the 'version'
     if version == '原始':
