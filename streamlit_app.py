@@ -314,6 +314,7 @@ if not results_flat:
 
 
 
+
 # ===== 產出總覽表（拆成「原始」與「年增」兩張表）=====
 summary_rows_raw = []
 summary_rows_yoy = []
@@ -332,29 +333,8 @@ def _to_int(x):
     except Exception:
         return 0
 
-def compute_score(pre, after, prewin, afterwin, times):
-    # 新分數規則：
-    # if pre>-5 and after>-5, score = pre+after+prewin-50+afterwin-50+times
-    # if pre<5 and after<5,  score = -pre-after-prewin+50-afterwin+50+times
-    # else score = 0
-    vals = [pre, after, prewin, afterwin]
-    if any(v is None for v in vals):
-        return 0.0
-    try:
-        pre = float(pre); after = float(after)
-        prewin = float(prewin); afterwin = float(afterwin)
-        times = int(times)
-    except Exception:
-        return 0.0
-    if (pre > -5) and (after > -5):
-        return pre + after + (prewin - 50) + (afterwin - 50) + times
-    elif (pre < 5) and (after < 5):
-        return -pre - after - (prewin - 50) - (afterwin - 50) + times
-    else:
-        return 0.0
-
 def _classify(pre, after, prewin, afterwin, times):
-    # 仍沿用三分類有效性邏輯（🐮/🐻/🚫）
+    # 三分類有效性邏輯（🐮/🐻/🚫）
     vals = [pre, after, prewin, afterwin, times]
     if any(v is None for v in vals):
         return "🚫 不是有效訊號"
@@ -370,6 +350,28 @@ def _classify(pre, after, prewin, afterwin, times):
     if (pre > 0 and after > 0) and (times > 8) and (win_sum > 130):
         return "🐻 熊市訊號"
     return "🚫 不是有效訊號"
+
+def compute_score(pre, after, prewin, afterwin, times):
+    # 根據分類決定得分：
+    # if 🐮：score = pre+after + (prewin-50) + (afterwin-50) + times
+    # if 🐻：score = -pre-after - (prewin-50) - (afterwin-50) + times
+    # else：0
+    vals = [pre, after, prewin, afterwin]
+    if any(v is None for v in vals):
+        return 0.0
+    try:
+        pre = float(pre); after = float(after)
+        prewin = float(prewin); afterwin = float(afterwin)
+        times = int(times)
+    except Exception:
+        return 0.0
+    label = _classify(pre, after, prewin, afterwin, times)
+    if label.startswith("🐮"):
+        return pre + after + (prewin - 50) + (afterwin - 50) + times
+    elif label.startswith("🐻"):
+        return -pre - after - (prewin - 50) - (afterwin - 50) + times
+    else:
+        return 0.0
 
 for r in results_flat:
     missing = [k for k in required_keys if k not in r]
@@ -440,6 +442,7 @@ st.dataframe(summary_raw_df, use_container_width=True)
 
 st.subheader("年增版本：所有 std × window 組合結果")
 st.dataframe(summary_yoy_df, use_container_width=True)
+
 
 
 
