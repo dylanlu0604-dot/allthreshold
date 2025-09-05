@@ -21,12 +21,6 @@ except Exception:
 st.set_page_config(page_title="熊市訊號與牛市訊號尋找工具", layout="wide")
 st.title("熊市訊號與牛市訊號尋找工具")
 
-# --- DEBUGGING HELPER ---
-# This will print the entire session state at the top of the app on every rerun.
-st.subheader("🕵️ 除錯資訊 (Session State)")
-st.json(st.session_state.to_dict())
-# --- END DEBUGGING ---
-
 # ---------- Load ID Map ----------
 @st.cache_data(show_spinner="下載ID對應表...", ttl=3600)
 def load_series_id_map() -> pd.DataFrame:
@@ -233,72 +227,21 @@ first_cols = ['版本', '系列', 'std', 'window', '觸發', '有效', '得分',
 other_cols = [c for c in combined_df.columns if c not in first_cols]
 combined_df = combined_df[first_cols + other_cols]
 
-st.divider()
 st.subheader("所有組合結果分析")
-st.caption("點選任一列，即可在下方查看該組合的詳細數據與績效走勢圖。")
-
-# Simplified dataframe display for robustness
 st.dataframe(
     combined_df, 
-    key="data_selector", 
-    on_select="rerun", 
-    selection_mode="single-row",
     use_container_width=True, 
     hide_index=True, 
     height=400
 )
 
-# --- ROBUST SELECTION HANDLING ---
-selected_row_data = None
-selection = st.session_state.get("data_selector")
 
-# The selection object from st.dataframe is {'rows': [index_of_clicked_row]}
-if selection and selection.get("rows"):
-    selected_index = selection["rows"][0]
-    # Ensure the index is valid
-    if selected_index < len(combined_df):
-        selected_row_data = combined_df.iloc[selected_index]
+# ========== MODIFICATION START: REMOVED THE DETAIL SECTION ==========
+# The entire block for "選定組合的詳細結果" has been removed.
+# The dataframe above no longer needs on_select="rerun" because nothing
+# needs to happen when a user clicks a row.
+# ========== MODIFICATION END ==========
 
-st.divider()
-st.subheader("選定組合的詳細結果")
-
-if selected_row_data is None:
-    st.info("請點選上方表格的任一列以查看詳細結果。")
-else:
-    version, std_val, win_val, mode_val = selected_row_data[['版本', 'std', 'window', '觸發']]
-    result_key_table = "resulttable1" if version == "原始" else "resulttable2"
-    result_key_curve = "finalb1" if version == "原始" else "finalb2"
-    
-    matching_result = next((r for r in results_flat if r['std']==std_val and r['winrolling']==win_val and r['mode']==mode_val), None)
-
-    st.markdown(f"### {version}版本：std = **{std_val}**, window = **{int(win_val)}**, 觸發 = **{mode_val}**")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("##### **績效摘要表**")
-        table_data = matching_result.get(result_key_table) if matching_result else None
-        if table_data is not None:
-            st.dataframe(table_data.style.format("{:.2f}"), use_container_width=True)
-        else:
-            st.info("無表格資料。")
-    with col2:
-        st.markdown("##### **事件前後平均走勢**")
-        curve_data = matching_result.get(result_key_curve) if matching_result else None
-        if curve_data is not None and "mean" in curve_data.columns:
-            y, n = curve_data["mean"].values, len(curve_data)
-            x = np.arange(-n//2, n - n//2)
-            fig, ax = plt.subplots(figsize=(6, 5))
-            ax.plot(x, y)
-            ax.axvline(0, color='r', linestyle='--', linewidth=1); ax.axhline(100, color='grey', linestyle=':', linewidth=1)
-            xlim = (-24, 24); ax.set_xlim(xlim)
-            mask = (x >= xlim[0]) & (x <= xlim[1])
-            if np.any(mask) and len(y[mask]) > 0:
-                ymin, ymax = np.min(y[mask]) * 0.98, np.max(y[mask]) * 1.02
-                ax.set_ylim(ymin, ymax if ymax > ymin else ymax + 1)
-            ax.set_xlabel('相對於事件的月數'); ax.set_ylabel('標準化指數 (事件月 = 100)')
-            ax.grid(True, alpha=0.5, linestyle='--')
-            st.pyplot(fig, use_container_width=True)
-        else:
-            st.info("無曲線圖資料。")
 
 st.divider()
 st.subheader("指標原始數據與移動平均")
