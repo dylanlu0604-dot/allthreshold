@@ -541,7 +541,7 @@ if 'chart_winrolling_value' in locals():
         best_raw_window = chart_winrolling_value
     if best_yoy_window is None:
         best_yoy_window = chart_winrolling_value
- (brush to set x-range; y auto-rescales) =====
+ # (brush to set x-range; y auto-rescales) =====
 st.divider()
 st.subheader("Each breath series: Levels (rolling mean ±σ) and YoY (brush to set time window)")
 
