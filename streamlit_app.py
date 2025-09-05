@@ -313,11 +313,12 @@ if not results_flat:
 
 
 
+
 # ===== 產出總覽表（拆成「原始」與「年增」兩張表）=====
 summary_rows_raw = []
 summary_rows_yoy = []
 required_keys = ["series_id","std","winrolling","times1","pre1","prewin1","after1","afterwin1",
-                 "times2","pre2","prewin2","after2","afterwin2"]  # 有效性用到勝率與次數
+                 "times2","pre2","prewin2","after2","afterwin2"]
 
 def _to_float(x):
     try:
@@ -329,13 +330,31 @@ def _to_int(x):
     try:
         return int(x)
     except Exception:
-        return None
+        return 0
 
-def classify_signal(pre, after, prewin, afterwin, times):
-    # 規則：
-    # 1) 🐮 牛市訊號 ： if  (pre < 0 and after < 0) and times > 8 and  (prewin + afterwin < 70)
-    # 2) 🐻 熊市訊號 ： if  (pre > 0 and after > 0) and times > 8 and  (prewin + afterwin > 130)
-    # 3) 🚫 不是有效訊號：不符合以上兩個條件
+def compute_score(pre, after, prewin, afterwin, times):
+    # 新分數規則：
+    # if pre>-5 and after>-5, score = pre+after+prewin-50+afterwin-50+times
+    # if pre<5 and after<5,  score = -pre-after-prewin+50-afterwin+50+times
+    # else score = 0
+    vals = [pre, after, prewin, afterwin]
+    if any(v is None for v in vals):
+        return 0.0
+    try:
+        pre = float(pre); after = float(after)
+        prewin = float(prewin); afterwin = float(afterwin)
+        times = int(times)
+    except Exception:
+        return 0.0
+    if (pre > -5) and (after > -5):
+        return pre + after + (prewin - 50) + (afterwin - 50) + times
+    elif (pre < 5) and (after < 5):
+        return -pre - after - (prewin - 50) - (afterwin - 50) + times
+    else:
+        return 0.0
+
+def _classify(pre, after, prewin, afterwin, times):
+    # 仍沿用三分類有效性邏輯（🐮/🐻/🚫）
     vals = [pre, after, prewin, afterwin, times]
     if any(v is None for v in vals):
         return "🚫 不是有效訊號"
@@ -361,10 +380,8 @@ for r in results_flat:
     pre1_val, after1_val = _to_float(r.get("pre1")), _to_float(r.get("after1"))
     prewin1_val, afterwin1_val = _to_float(r.get("prewin1")), _to_float(r.get("afterwin1"))
     times1_val = _to_int(r.get("times1"))
-    score1_val = r.get("score1")
-    if score1_val is None and (pre1_val is not None) and (after1_val is not None):
-        score1_val = (after1_val - pre1_val)
-    label1 = classify_signal(pre1_val, after1_val, prewin1_val, afterwin1_val, times1_val)
+    score1_val = compute_score(pre1_val, after1_val, prewin1_val, afterwin1_val, times1_val)
+    label1 = _classify(pre1_val, after1_val, prewin1_val, afterwin1_val, times1_val)
 
     summary_rows_raw.append({
         "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
@@ -384,10 +401,8 @@ for r in results_flat:
     pre2_val, after2_val = _to_float(r.get("pre2")), _to_float(r.get("after2"))
     prewin2_val, afterwin2_val = _to_float(r.get("prewin2")), _to_float(r.get("afterwin2"))
     times2_val = _to_int(r.get("times2"))
-    score2_val = r.get("score2")
-    if score2_val is None and (pre2_val is not None) and (after2_val is not None):
-        score2_val = (after2_val - pre2_val)
-    label2 = classify_signal(pre2_val, after2_val, prewin2_val, afterwin2_val, times2_val)
+    score2_val = compute_score(pre2_val, after2_val, prewin2_val, afterwin2_val, times2_val)
+    label2 = _classify(pre2_val, after2_val, prewin2_val, afterwin2_val, times2_val)
 
     summary_rows_yoy.append({
         "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
@@ -425,6 +440,7 @@ st.dataframe(summary_raw_df, use_container_width=True)
 
 st.subheader("年增版本：所有 std × window 組合結果")
 st.dataframe(summary_yoy_df, use_container_width=True)
+
 
 
 
