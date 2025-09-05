@@ -1,6 +1,6 @@
 import os
 import time
-import math # <--- 引入 math 模組
+import math # <--- 引入 math 模組，用於精確比對
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -283,6 +283,7 @@ def process_series(variable_id: int, target_id: int, std_value: float, winrollin
 
 
 # ---------------------- Main Flow ----------------------
+
 series_ids = [selected_variable_id] # 取得下拉式選單的 ID
 mode = trigger_mode
 k = _need_api_key()
@@ -431,7 +432,32 @@ if not summary_yoy_df.empty:
     by_cols = [c for c in ["得分","事件數"] if c in summary_yoy_df.columns]
     summary_yoy_df = summary_yoy_df.sort_values(by=by_cols, ascending=False, na_position="last").reset_index(drop=True)
 
-# ===== Interactive Tables and Plots =====
+
+# ==================== START: MODIFIED SECTION ====================
+
+st.subheader("原始版本：所有 std × window 組合結果")
+st.info("點選下方任一列（Row）以在下方繪製該組合的詳細圖表。")
+# 步驟 1: 讓 dataframe 變得可互動
+st.dataframe(
+    summary_raw_df,
+    use_container_width=True,
+    on_select="rerun",
+    selection_mode="single-row",
+    key="raw_selection"
+)
+
+st.subheader("年增版本：所有 std × window 組合結果")
+st.info("點選下方任一列（Row）以在下方繪製該組合的詳細圖表。")
+# 步驟 1: 讓 dataframe 變得可互動
+st.dataframe(
+    summary_yoy_df,
+    use_container_width=True,
+    on_select="rerun",
+    selection_mode="single-row",
+    key="yoy_selection"
+)
+
+# --- 顯示詳細圖表的共用函數 ---
 def plot_mean_curve(finalb_df, title):
     if finalb_df is None or "mean" not in finalb_df.columns:
         st.info(f"無 {title} 曲線資料。")
@@ -442,7 +468,7 @@ def plot_mean_curve(finalb_df, title):
     x = np.arange(-half, n - half)   # 0 對齊事件當月
     fig, ax = plt.subplots(figsize=(6, 5))
     ax.plot(x, y, label=title)
-    ax.axvline(0, color='red', linestyle='--')
+    ax.axvline(0, linestyle='--', color='red')
     xlim = (-15, 15)
     ax.set_xlim(xlim)
     mask = (x >= xlim[0]) & (x <= xlim[1])
@@ -455,20 +481,14 @@ def plot_mean_curve(finalb_df, title):
         ax.set_ylim(ymin, ymax)
     ax.set_xlabel('事件發生前後月數')
     ax.set_ylabel('指數 (100 = 事件當月)')
-    ax.set_title(title)
     st.pyplot(fig, use_container_width=True)
 
-# --- 原始版本互動區 ---
-st.subheader("原始版本：所有 std × window 組合結果")
-st.info("點選下方任一列（Row）以繪製該組合的詳細圖表。")
-st.dataframe(
-    summary_raw_df,
-    use_container_width=True,
-    on_select="rerun",
-    selection_mode="single-row",
-    key="raw_selection"
-)
 
+st.divider()
+st.header("選定組合之詳細分析")
+
+# --- 步驟 2 & 3: 根據使用者的點選來顯示詳細資訊 ---
+# 檢查「原始版本」表格是否有被點選
 selection_raw = st.session_state.get("raw_selection")
 if selection_raw and selection_raw.get("rows"):
     selected_index = selection_raw["rows"][0]
@@ -477,37 +497,31 @@ if selection_raw and selection_raw.get("rows"):
         selected_std = selected_row['std']
         selected_window = selected_row['window']
 
-        # --- 使用更穩健的方式尋找匹配的結果 ---
+        # 使用 math.isclose() 精確尋找匹配的結果
         selected_result_raw = None
         for r in results_flat:
             if r.get('std') is not None and r.get('winrolling') is not None:
                 if math.isclose(r.get('std'), selected_std) and int(r.get('winrolling')) == int(selected_window):
                     selected_result_raw = r
-                    break # 找到後即停止搜尋
+                    break
         
         if selected_result_raw:
-            with st.container(border=True):
-                st.markdown(f"#### 原始版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
-                col1, col2 = st.columns(2)
-                with col1:
-                    if selected_result_raw.get("resulttable1") is not None:
-                        st.dataframe(selected_result_raw["resulttable1"], use_container_width=True)
-                    else:
-                        st.info("無詳細表格資料。")
-                with col2:
-                    plot_mean_curve(selected_result_raw.get("finalb1"), "事件前後股價平均走勢")
+            st.markdown(f"### 原始版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("詳細數據：")
+                if selected_result_raw.get("resulttable1") is not None:
+                    st.dataframe(selected_result_raw["resulttable1"], use_container_width=True)
+                else:
+                    st.info("無詳細表格資料。")
+            with col2:
+                st.write("事件前後股價平均走勢：")
+                plot_mean_curve(selected_result_raw.get("finalb1"), "原始版本")
+        else:
+            st.warning("找不到對應的詳細資料，請重新整理或檢查程式。")
 
-# --- 年增版本互動區 ---
-st.subheader("年增版本：所有 std × window 組合結果")
-st.info("點選下方任一列（Row）以繪製該組合的詳細圖表。")
-st.dataframe(
-    summary_yoy_df,
-    use_container_width=True,
-    on_select="rerun",
-    selection_mode="single-row",
-    key="yoy_selection"
-)
 
+# 檢查「年增版本」表格是否有被點選
 selection_yoy = st.session_state.get("yoy_selection")
 if selection_yoy and selection_yoy.get("rows"):
     selected_index = selection_yoy["rows"][0]
@@ -516,27 +530,34 @@ if selection_yoy and selection_yoy.get("rows"):
         selected_std = selected_row['std']
         selected_window = selected_row['window']
         
-        # --- 使用更穩健的方式尋找匹配的結果 ---
+        # 使用 math.isclose() 精確尋找匹配的結果
         selected_result_yoy = None
         for r in results_flat:
             if r.get('std') is not None and r.get('winrolling') is not None:
                 if math.isclose(r.get('std'), selected_std) and int(r.get('winrolling')) == int(selected_window):
                     selected_result_yoy = r
-                    break # 找到後即停止搜尋
+                    break
 
         if selected_result_yoy:
-            with st.container(border=True):
-                st.markdown(f"#### 年增版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
-                col3, col4 = st.columns(2)
-                with col3:
-                    if selected_result_yoy.get("resulttable2") is not None:
-                        st.dataframe(selected_result_yoy["resulttable2"], use_container_width=True)
-                    else:
-                        st.info("無詳細表格資料。")
-                with col4:
-                    plot_mean_curve(selected_result_yoy.get("finalb2"), "事件前後股價平均走勢 (年增)")
+            st.markdown(f"### 年增版本詳細分析：std = **{selected_std}**, window = **{int(selected_window)}**")
+            col3, col4 = st.columns(2)
+            with col3:
+                st.write("詳細數據：")
+                if selected_result_yoy.get("resulttable2") is not None:
+                    st.dataframe(selected_result_yoy["resulttable2"], use_container_width=True)
+                else:
+                    st.info("無詳細表格資料。")
+            with col4:
+                st.write("事件前後股價平均走勢：")
+                plot_mean_curve(selected_result_yoy.get("finalb2"), "年增版本")
+        else:
+             st.warning("找不到對應的詳細資料，請重新整理或檢查程式。")
 
-# ===== Plot by series_ids_text: Levels & YoY =====
+
+# ==================== END: MODIFIED SECTION ====================
+
+
+# ===== Plot by series_ids_text: Levels & YoY
 st.divider()
 st.subheader("可調整時間區間的序列圖 (根據上方表格點選的組合更新)")
 
@@ -544,76 +565,124 @@ st.subheader("可調整時間區間的序列圖 (根據上方表格點選的組�
 winrolling_for_levels = chart_winrolling_value
 winrolling_for_yoy = chart_winrolling_value
 
+# 如果使用者在「原始版本」表格中點選了某個組合，則使用該組合的 window
 selection_raw = st.session_state.get("raw_selection")
 if selection_raw and selection_raw.get("rows"):
     selected_index = selection_raw["rows"][0]
     if selected_index < len(summary_raw_df):
         winrolling_for_levels = int(summary_raw_df.iloc[selected_index]['window'])
 
+# 如果使用者在「年增版本」表格中點選了某個組合，則使用該組合的 window
 selection_yoy = st.session_state.get("yoy_selection")
 if selection_yoy and selection_yoy.get("rows"):
     selected_index = selection_yoy["rows"][0]
     if selected_index < len(summary_yoy_df):
         winrolling_for_yoy = int(summary_yoy_df.iloc[selected_index]['window'])
 
+
 alt.data_transformers.disable_max_rows()
+
 sigma_levels = [0.5, 1.0, 1.5, 2.0]
 
 def levels_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value: int):
     roll_mean = s.rolling(winrolling_value).mean()
     roll_std = s.rolling(winrolling_value).std()
-    df_levels = pd.DataFrame({"Date": s.index, "Level": s.values, "Mean": roll_mean.values})
+
+    df_levels = pd.DataFrame({
+        "Date": s.index,
+        "Level": s.values,
+        "Mean": roll_mean.values,
+    })
+    # add ±σ bands
     for m in sigma_levels:
         df_levels[f"+{m}σ"] = (roll_mean + m * roll_std).values
         df_levels[f"-{m}σ"] = (roll_mean - m * roll_std).values
+
+    # melt to long format
     long_levels = df_levels.melt("Date", var_name="Series", value_name="Value").dropna()
+
+    # brush selection on x (time)
     brush = alt.selection_interval(encodings=["x"])
-    upper = (alt.Chart(long_levels).mark_line().encode(
-        x=alt.X("Date:T", title="Date"),
-        y=alt.Y("Value:Q", title="Level", scale=alt.Scale(zero=False)),
-        color=alt.Color("Series:N", legend=alt.Legend(orient="top")),
-        tooltip=[alt.Tooltip("Date:T"), "Series:N", alt.Tooltip("Value:Q", format=".2f")],
-    ).transform_filter(brush).properties(title=f"{name} ({sid}) | {winrolling_value}-period rolling mean ±σ", height=320))
-    lower = (alt.Chart(df_levels).mark_area(opacity=0.4).encode(
-        x=alt.X("Date:T", title=""), y=alt.Y("Level:Q", title="")
-    ).properties(height=60).add_params(brush))
+
+    upper = (
+        alt.Chart(long_levels)
+        .mark_line()
+        .encode(
+            x=alt.X("Date:T", title="Date"),
+            y=alt.Y("Value:Q", title="Level", scale=alt.Scale(zero=False)),
+            color=alt.Color("Series:N", legend=alt.Legend(orient="top")),
+            tooltip=[alt.Tooltip("Date:T"), "Series:N", alt.Tooltip("Value:Q", format=".2f")],
+        )
+        .transform_filter(brush)
+        .properties(title=f"{name} ({sid}) | {winrolling_value}-period rolling mean ±σ", height=320)
+    )
+
+    lower = (
+        alt.Chart(df_levels)
+        .mark_area(opacity=0.4)
+        .encode(x=alt.X("Date:T", title=""), y=alt.Y("Level:Q", title=""))
+        .properties(height=60)
+        .add_params(brush)
+    )
+
     return alt.vconcat(upper, lower)
 
 def yoy_chart_with_brush(s: pd.Series, sid: int, name: str, winrolling_value: int):
     yoy = s.pct_change(12) * 100.0
     yoy_mean = yoy.rolling(winrolling_value).mean()
     yoy_std = yoy.rolling(winrolling_value).std()
-    df_yoy = pd.DataFrame({"Date": yoy.index, "YoY (%)": yoy.values, "Mean": yoy_mean.values})
+
+    df_yoy = pd.DataFrame({
+        "Date": yoy.index,
+        "YoY (%)": yoy.values,
+        "Mean": yoy_mean.values,
+    })
     for m in sigma_levels:
         df_yoy[f"+{m}σ"] = (yoy_mean + m * yoy_std).values
         df_yoy[f"-{m}σ"] = (yoy_mean - m * yoy_std).values
+
     long_yoy = df_yoy.melt("Date", var_name="Series", value_name="Value").dropna()
+
     brush = alt.selection_interval(encodings=["x"])
-    upper = (alt.Chart(long_yoy).mark_line().encode(
-        x=alt.X("Date:T", title="Date"),
-        y=alt.Y("Value:Q", title="YoY (%)"),
-        color=alt.Color("Series:N", legend=alt.Legend(orient="top")),
-        tooltip=[alt.Tooltip("Date:T"), "Series:N", alt.Tooltip("Value:Q", format=".2f")],
-    ).transform_filter(brush).properties(title=f"{name} ({sid}) | YoY (%) with {winrolling_value}-period rolling mean ±σ", height=320))
+
+    upper = (
+        alt.Chart(long_yoy)
+        .mark_line()
+        .encode(
+            x=alt.X("Date:T", title="Date"),
+            y=alt.Y("Value:Q", title="YoY (%)"),
+            color=alt.Color("Series:N", legend=alt.Legend(orient="top")),
+            tooltip=[alt.Tooltip("Date:T"), "Series:N", alt.Tooltip("Value:Q", format=".2f")],
+        )
+        .transform_filter(brush)
+        .properties(title=f"{name} ({sid}) | YoY (%) with {winrolling_value}-period rolling mean ±σ", height=320)
+    )
+
     zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(strokeDash=[4, 4]).encode(y="y:Q")
-    lower = (alt.Chart(df_yoy).mark_area(opacity=0.4).encode(
-        x=alt.X("Date:T", title=""), y=alt.Y("YoY (%):Q", title="")
-    ).properties(height=60).add_params(brush))
+
+    lower = (
+        alt.Chart(df_yoy)
+        .mark_area(opacity=0.4)
+        .encode(x=alt.X("Date:T", title=""), y=alt.Y("YoY (%):Q", title=""))
+        .properties(height=60)
+        .add_params(brush)
+    )
+
     return alt.vconcat(upper + zero_line, lower)
 
-# 根據選擇的變數 ID 抓取資料並繪圖
+# 根據名稱找到 ID
 sid = id_name_map[id_name_map['繁中名稱'] == selected_variable_name]['ID'].iloc[0]
-df_target = mm(int(sid), "MS", f"series_{sid}", k)
 
+df_target = mm(int(sid), "MS", f"series_{sid}", k)
 if df_target is None or df_target.empty:
-    st.info(f"無 {sid} 的資料，略過繪圖。")
+    st.info(f"No data for series {sid}, skipping.")
 else:
     s = df_target.iloc[:, 0].astype(float)
-    with st.expander(f"序列圖表: {selected_variable_name} ({sid})", expanded=True):
+    with st.expander(f"Series: {selected_variable_name} ({sid})", expanded=True):
         colA, colB = st.columns(2)
         with colA:
-            st.caption(f"Levels 圖表的 rolling window = {winrolling_for_levels}")
+            st.caption(f"Levels rolling window = {winrolling_for_levels}")
             st.altair_chart(levels_chart_with_brush(s, sid, selected_variable_name, winrolling_for_levels), use_container_width=True)
         with colB:
-            st.caption(f"YoY 圖表的 rolling window = {winrolling_for_yoy}")
+            st.caption(f"YoY rolling window = {winrolling_for_yoy}")
             st.altair_chart(yoy_chart_with_brush(s, sid, selected_variable_name, winrolling_for_yoy), use_container_width=True)
