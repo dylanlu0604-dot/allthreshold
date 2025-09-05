@@ -309,41 +309,62 @@ if not results_flat:
     st.info("尚無可顯示結果。請調整參數或確認 series 有足夠歷史資料。")
     st.stop()
 
+
+
 # ===== 產出總覽表（每一列是一個 std×window）=====
 summary_rows = []
 required_keys = ["series_id","std","winrolling","times1","pre1","prewin1","after1","afterwin1",
-                 "score1","times2","pre2","after2","score2","effective1","effective2"]
+                 "times2","pre2","after2","effective1","effective2"]  # score1/score2 可由 after-pre 回推
 
 for r in results_flat:
-    # 安全取值，若缺欄位則以 NaN/合理預設代替，並提示
+    # 檢查必要欄位
     missing = [k for k in required_keys if k not in r]
+    # 回推 score1/score2
+    def _to_float(x):
+        try:
+            return float(x)
+        except Exception:
+            return None
+    pre1_val, after1_val = _to_float(r.get("pre1")), _to_float(r.get("after1"))
+    pre2_val, after2_val = _to_float(r.get("pre2")), _to_float(r.get("after2"))
+    score1_val = r.get("score1", None)
+    score2_val = r.get("score2", None)
+    if score1_val is None and pre1_val is not None and after1_val is not None:
+        score1_val = after1_val - pre1_val
+    if score2_val is None and pre2_val is not None and after2_val is not None:
+        score2_val = after2_val - pre2_val
+
     if missing:
+        # 僅在關鍵欄位缺失時警告（score 不列入警告）
         st.warning(f"結果缺少欄位 {missing}，已以空值代替（std={r.get('std','?')}, window={r.get('winrolling','?')})")
+
     summary_rows.append({
         "系列": get_name_from_id(r.get("series_id", -1), str(r.get("series_id", ""))),
         "ID": r.get("series_id", None),
         "std": r.get("std", None),
         "window": r.get("winrolling", None),
         "事件數(原始)": r.get("times1", None),
-        "前12m均值%(原始)": r.get("pre1", None),
-        "後12m均值%(原始)": r.get("after1", None),
+        "前12m均值%(原始)": pre1_val,
+        "後12m均值%(原始)": after1_val,
         "勝率前(原始)": r.get("prewin1", None),
         "勝率後(原始)": r.get("afterwin1", None),
-        "得分(原始)": r.get("score1", None),
+        "得分(原始)": score1_val,
         "事件數(年增)": r.get("times2", None),
-        "前12m均值%(年增)": r.get("pre2", None),
-        "後12m均值%(年增)": r.get("after2", None),
-        "得分(年增)": r.get("score2", None),
+        "前12m均值%(年增)": pre2_val,
+        "後12m均值%(年增)": after2_val,
+        "得分(年增)": score2_val,
         "有效(原始)": r.get("effective1", None),
         "有效(年增)": r.get("effective2", None),
     })
 
 summary_df = pd.DataFrame(summary_rows)
+# 型別轉換
 for col in ["事件數(原始)","前12m均值%(原始)","後12m均值%(原始)","勝率前(原始)","勝率後(原始)","得分(原始)",
             "事件數(年增)","前12m均值%(年增)","後12m均值%(年增)","得分(年增)"]:
     if col in summary_df.columns:
         summary_df[col] = pd.to_numeric(summary_df[col], errors="coerce")
 
+# 排序
 if set(["得分(年增)","得分(原始)"]).issubset(summary_df.columns):
     summary_df = summary_df.sort_values(by=["得分(年增)", "得分(原始)"], ascending=False, na_position="last")
 
